@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Location Finder & Website Health Explorer</title>
+  <meta name="description" content="Discover nearby places, check their website availability, and export detailed results to Excel using TomTom API.">
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+            <circle cx="12" cy="10" r="3"/>
+          </svg>
+        </div>
+        <div>
+          <h1>Location Finder</h1>
+          <p class="subtitle">TomTom POI discovery with parallel website verification</p>
+        </div>
+      </div>
+    </header>
+
+    <!-- Search Section -->
+    <section class="search-card">
+      <form id="search-form" class="search-form">
+        <div class="form-group flex-grow">
+          <label for="location-input">Location</label>
+          <div class="input-wrapper">
+            <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.3-4.3"/>
+            </svg>
+            <input type="text" id="location-input" placeholder="e.g. Indiranagar, Bengaluru" required autocomplete="off">
+          </div>
+        </div>
+
+        <div class="form-group select-group">
+          <label for="category-select">Category</label>
+          <div class="select-wrapper">
+            <select id="category-select">
+              <option value="both" selected>Both (Restaurants & Stays)</option>
+              <option value="restaurants">Restaurants</option>
+              <option value="stays">Stays (Hotels)</option>
+            </select>
+          </div>
+        </div>
+
+        <button type="submit" id="search-btn" class="btn btn-primary">
+          <svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span>Search Places</span>
+        </button>
+      </form>
+    </section>
+
+    <!-- Main Results Container -->
+    <main class="results-card">
+      <!-- Loading State -->
+      <div id="loading-state" class="state-container hidden">
+        <div class="spinner"></div>
+        <p id="loading-text" class="state-text">Searching nearby places and checking website health...</p>
+        <span class="subtext">This takes just a few seconds...</span>
+      </div>
+
+      <!-- Error State -->
+      <div id="error-state" class="state-container error-card hidden">
+        <div class="state-icon error-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+        </div>
+        <h3 id="error-title">Unable to complete search</h3>
+        <p id="error-message">Location not found. Please verify the place name and try again.</p>
+      </div>
+
+      <!-- Empty Initial State -->
+      <div id="initial-state" class="state-container">
+        <div class="state-icon placeholder-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/>
+            <circle cx="12" cy="10" r="3"/>
+          </svg>
+        </div>
+        <h3>Discover Places & Website Status</h3>
+        <p>Enter a neighborhood or city (e.g. "Indiranagar, Bengaluru") to discover nearby places and export details to Excel.</p>
+      </div>
+
+      <!-- Empty Search Results State -->
+      <div id="empty-state" class="state-container hidden">
+        <div class="state-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </div>
+        <h3>No places found</h3>
+        <p>No places found, try a larger area or a different name.</p>
+      </div>
+
+      <!-- Data Section -->
+      <div id="results-wrapper" class="hidden">
+        <!-- Results Bar -->
+        <div class="results-header">
+          <div class="summary-info">
+            <span id="summary-line" class="summary-text">0 places found</span>
+            <span id="cache-badge" class="badge badge-info hidden">Cached</span>
+          </div>
+
+          <div class="controls-group">
+            <label class="filter-checkbox">
+              <input type="checkbox" id="active-only-checkbox">
+              <span class="checkbox-label">Show only active websites</span>
+            </label>
+
+            <button id="download-excel-btn" class="btn btn-export" disabled>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <span>Download Excel</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="table-container">
+          <table class="places-table">
+            <thead>
+              <tr>
+                <th data-sort="name" class="sortable">Name <span class="sort-icon">↕</span></th>
+                <th data-sort="type" class="sortable">Type <span class="sort-icon">↕</span></th>
+                <th data-sort="address" class="sortable">Address <span class="sort-icon">↕</span></th>
+                <th>Phone</th>
+                <th data-sort="website" class="sortable">Website <span class="sort-icon">↕</span></th>
+                <th data-sort="websiteStatus" class="sortable">Website Status <span class="sort-icon">↕</span></th>
+                <th>Opening Hours</th>
+                <th>Map Link</th>
+              </tr>
+            </thead>
+            <tbody id="places-tbody">
+              <!-- Rows injected dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <footer class="app-footer">
+      <p>Powered by TomTom Search API & Express</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

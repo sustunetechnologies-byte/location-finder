@@ -1,0 +1,23 @@
+{
+  "name": "location-finder-tomtom",
+  "version": "1.0.0",
+  "description": "Discover locations via TomTom API with parallel website health checks and Excel export",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "tomtom",
+    "express",
+    "location-finder",
+    "exceljs"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2"
+  }
+}
