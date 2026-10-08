@@ -425,6 +425,11 @@ app.post('/api/export', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`[Server] Location Finder server listening at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`[Server] Location Finder server listening at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
+
