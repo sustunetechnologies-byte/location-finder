@@ -5,7 +5,7 @@ const ExcelJS = require('exceljs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const TOMTOM_API_KEY = process.env.TOMTOM_API_KEY;
+const TOMTOM_API_KEY = (process.env.TOMTOM_API_KEY || '').trim().replace(/^["']|["']$/g, '');
 
 if (!TOMTOM_API_KEY) {
   console.error('[ERROR] TOMTOM_API_KEY is not defined in environment or .env file!');
@@ -94,9 +94,16 @@ function formatOpeningHours(openingHours) {
 
 // Geocode endpoint logic
 async function geocodeLocation(locationStr) {
+  if (!TOMTOM_API_KEY) {
+    throw { status: 500, message: 'TOMTOM_API_KEY is missing on Vercel. Please add it under Vercel Project Settings > Environment Variables and redeploy.' };
+  }
+
   const geoUrl = `https://api.tomtom.com/search/2/geocode/${encodeURIComponent(locationStr)}.json?countrySet=IN&limit=1&key=${TOMTOM_API_KEY}`;
   const response = await fetch(geoUrl);
   
+  if (response.status === 401) {
+    throw { status: 401, message: 'Invalid or missing TomTom API key (401 Unauthorized). Please check your TOMTOM_API_KEY environment variable in Vercel.' };
+  }
   if (response.status === 403) {
     throw { status: 403, message: 'Invalid TomTom API key or API service not enabled' };
   }
@@ -116,9 +123,11 @@ async function geocodeLocation(locationStr) {
 
 // Search POIs from TomTom
 async function fetchPois(lat, lon, radius, categorySet, queryText) {
+  if (!TOMTOM_API_KEY) return [];
   const url = `https://api.tomtom.com/search/2/poiSearch/${encodeURIComponent(queryText)}.json?lat=${lat}&lon=${lon}&radius=${radius}&countrySet=IN&limit=50&categorySet=${categorySet}&key=${TOMTOM_API_KEY}`;
   const res = await fetch(url);
   if (!res.ok) {
+    if (res.status === 401) throw { status: 401, message: 'Invalid or missing TomTom API key (401 Unauthorized)' };
     if (res.status === 403) throw { status: 403, message: 'Invalid TomTom API key or service not enabled' };
     if (res.status === 429) throw { status: 429, message: 'TomTom API rate limit exceeded' };
     return [];
