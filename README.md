@@ -15,11 +15,15 @@ A full-stack Node.js + Express application that discovers nearby places (Restaur
   - ⚪ **Not listed**: No website URL provided by API
 - **10-Minute Query Cache**: In-memory caching for duplicate searches to optimize API rate usage.
 - **Interactive UI**:
+  - **Search Places (without website)**: Dedicated button that filters discovery to places with missing or inactive websites, displaying live summaries such as *"12 of 19 places have no active website"*.
+  - **Generate Website Previews**: Instant on-demand website builder for places lacking an active web presence. Generates self-contained, mobile-friendly draft preview websites (`/preview/:token`) tailored specifically for Restaurants (warm culinary palette) and Stays (tranquil hospitality palette).
+  - **Strictly Factual & Private**: Built solely from verified TomTom metadata with zero fabricated reviews or hallucinated menus, no stock/AI images, visible Susunetech disclaimer banners at the top and footer, and `noindex, nofollow` headers / `robots.txt` disallow rules to prevent search engine indexing.
   - Filter checkbox: *Show only places with an active website*.
   - Sort table columns ascending/descending by clicking table headers.
   - Live summary line detailing total results, count with phone, and count with website.
   - Color-coded status badges and direct clickable links for websites and Google Maps navigation.
 - **Excel (.xlsx) Export**:
+  - Exports exactly the rows currently visible (including filtered views like places without websites).
   - Styled dark header with frozen row and column auto-filters.
   - Auto-fitted column widths and custom cell background colors for Website Status.
   - Clickable hyperlinks for Website and Google Maps location cells.

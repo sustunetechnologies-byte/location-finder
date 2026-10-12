@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const locationInput = document.getElementById('location-input');
   const categorySelect = document.getElementById('category-select');
   const searchBtn = document.getElementById('search-btn');
+  const searchNoWebsiteBtn = document.getElementById('search-no-website-btn');
 
   const loadingState = document.getElementById('loading-state');
   const errorState = document.getElementById('error-state');
@@ -19,16 +20,36 @@ document.addEventListener('DOMContentLoaded', () => {
   const downloadExcelBtn = document.getElementById('download-excel-btn');
   const placesTbody = document.getElementById('places-tbody');
 
+  const previewAlert = document.getElementById('preview-alert');
+  const previewAlertMessage = document.getElementById('preview-alert-message');
+  const previewAlertLink = document.getElementById('preview-alert-link');
+  const previewAlertClose = document.getElementById('preview-alert-close');
+
   // Application State
   let rawPlaces = [];
   let currentSearchQuery = '';
+  let currentCategory = 'both';
+  let filterMode = 'all'; // 'all' or 'no-website'
   let sortColumn = 'name';
   let sortDirection = 'asc'; // 'asc' or 'desc'
 
   // Event Listeners
   searchForm.addEventListener('submit', handleSearchSubmit);
-  activeOnlyCheckbox.addEventListener('change', renderTableAndSummary);
+  if (searchNoWebsiteBtn) {
+    searchNoWebsiteBtn.addEventListener('click', handleSearchNoWebsiteClick);
+  }
+  activeOnlyCheckbox.addEventListener('change', () => {
+    // When manually checking "Show only active websites", reset no-website filter mode
+    filterMode = 'all';
+    renderTableAndSummary();
+  });
   downloadExcelBtn.addEventListener('click', handleExcelDownload);
+
+  if (previewAlertClose) {
+    previewAlertClose.addEventListener('click', () => {
+      previewAlert.classList.add('hidden');
+    });
+  }
 
   // Table Column Header Sort Listeners
   document.querySelectorAll('th.sortable').forEach(th => {
@@ -45,17 +66,49 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Handle Search Submission
+  // Table Body Event Delegation for "Generate Website" Action
+  placesTbody.addEventListener('click', handleTbodyClick);
+
+  // Handle Standard "Search Places" Submit
   async function handleSearchSubmit(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
+    filterMode = 'all';
+    await executeSearch();
+  }
+
+  // Handle "Search Places (without website)" Button Click
+  async function handleSearchNoWebsiteClick() {
+    const query = locationInput.value.trim();
+    const category = categorySelect.value;
+
+    if (!query) {
+      locationInput.focus();
+      return;
+    }
+
+    filterMode = 'no-website';
+    activeOnlyCheckbox.checked = false; // Turn off "active websites" filter
+
+    // If query matches current result set and places already loaded, instantly filter
+    if (rawPlaces.length > 0 && query.toLowerCase() === currentSearchQuery.toLowerCase() && category === currentCategory) {
+      renderTableAndSummary();
+      return;
+    }
+
+    await executeSearch();
+  }
+
+  // Execute Search API Call
+  async function executeSearch() {
     const query = locationInput.value.trim();
     const category = categorySelect.value;
 
     if (!query) return;
 
     currentSearchQuery = query;
+    currentCategory = category;
     showState('loading');
-    searchBtn.disabled = true;
+    setButtonsDisabled(true);
 
     try {
       const response = await fetch('/api/search', {
@@ -90,8 +143,13 @@ document.addEventListener('DOMContentLoaded', () => {
       errorMessage.textContent = err.message || 'An error occurred while fetching location data.';
       showState('error');
     } finally {
-      searchBtn.disabled = false;
+      setButtonsDisabled(false);
     }
+  }
+
+  function setButtonsDisabled(disabled) {
+    searchBtn.disabled = disabled;
+    if (searchNoWebsiteBtn) searchNoWebsiteBtn.disabled = disabled;
   }
 
   // Manage UI States
@@ -113,8 +171,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function getFilteredAndSortedPlaces() {
     let filtered = [...rawPlaces];
 
-    // Filter checkbox: Show only active websites
-    if (activeOnlyCheckbox.checked) {
+    // Feature 1: Filter to places without active website (Not listed or Inactive)
+    if (filterMode === 'no-website') {
+      filtered = filtered.filter(p => p.websiteStatus === 'Not listed' || p.websiteStatus === 'Inactive');
+    } else if (activeOnlyCheckbox.checked) {
+      // Checkbox filter: Show only active websites
       filtered = filtered.filter(p => p.websiteStatus === 'Active' || p.websiteStatus === 'Active (restricted)');
     }
 
@@ -135,12 +196,15 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderTableAndSummary() {
     const displayedPlaces = getFilteredAndSortedPlaces();
 
-    // Calculate Summary Statistics
+    // Summary Line Statistics
     const totalCount = displayedPlaces.length;
     const phoneCount = displayedPlaces.filter(p => p.phone && p.phone !== 'Not available').length;
     const websiteCount = displayedPlaces.filter(p => p.website && p.website !== 'Not available').length;
 
-    if (activeOnlyCheckbox.checked) {
+    if (filterMode === 'no-website') {
+      // Feature 1 Requirement: "12 of 19 places have no active website"
+      summaryLine.textContent = `${totalCount} of ${rawPlaces.length} places have no active website`;
+    } else if (activeOnlyCheckbox.checked) {
       summaryLine.textContent = `${totalCount} active website places found: ${phoneCount} with phone, ${websiteCount} with website`;
     } else {
       summaryLine.textContent = `${totalCount} places found: ${phoneCount} with phone, ${websiteCount} with website`;
@@ -155,7 +219,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (totalCount === 0) {
       placesTbody.innerHTML = `
         <tr>
-          <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+          <td colspan="9" style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
             No places match the selected filter.
           </td>
         </tr>
@@ -206,6 +270,25 @@ document.addEventListener('DOMContentLoaded', () => {
         ? escapeHtml(place.openingHours) 
         : '<span class="text-muted-cell">Not available</span>';
 
+      // Feature 2: Action Cell (Generate Website or Has website badge)
+      const hasActiveWebsite = place.websiteStatus === 'Active' || place.websiteStatus === 'Active (restricted)';
+      let actionCellContent = '';
+
+      if (hasActiveWebsite) {
+        actionCellContent = `<span class="badge badge-has-website">Has website</span>`;
+      } else {
+        actionCellContent = `
+          <div class="action-cell-container">
+            <button type="button" class="btn-action-generate" data-place-id="${escapeHtml(place.id)}">
+              <span>Generate Website</span>
+            </button>
+            <a href="#" target="_blank" rel="noopener noreferrer" class="preview-row-link hidden" data-preview-link="${escapeHtml(place.id)}">
+              Open Preview ↗
+            </a>
+          </div>
+        `;
+      }
+
       tr.innerHTML = `
         <td><strong>${escapeHtml(place.name)}</strong></td>
         <td>${typeBadge}</td>
@@ -215,10 +298,82 @@ document.addEventListener('DOMContentLoaded', () => {
         <td>${statusBadge}</td>
         <td>${hoursContent}</td>
         <td>${mapCellContent}</td>
+        <td>${actionCellContent}</td>
       `;
 
       placesTbody.appendChild(tr);
     });
+  }
+
+  // Handle "Generate Website" Button Click
+  async function handleTbodyClick(e) {
+    const btn = e.target.closest('.btn-action-generate');
+    if (!btn) return;
+
+    const placeId = btn.getAttribute('data-place-id');
+    const place = rawPlaces.find(p => String(p.id) === String(placeId));
+    if (!place) return;
+
+    // Loading State
+    btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = `<span class="btn-spinner"></span> <span>Generating...</span>`;
+
+    try {
+      const response = await fetch('/api/generate-site', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: place.name,
+          type: place.type,
+          address: place.address,
+          phone: place.phone,
+          openingHours: place.openingHours,
+          coordinates: place.coordinates,
+          mapLink: place.mapLink
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to generate website preview.');
+      }
+
+      // Reveal preview link in the table row
+      const actionContainer = btn.closest('.action-cell-container');
+      const rowLink = actionContainer ? actionContainer.querySelector('[data-preview-link]') : null;
+      if (rowLink) {
+        rowLink.href = data.previewUrl;
+        rowLink.classList.remove('hidden');
+      }
+
+      // Open preview in new tab
+      const newWindow = window.open(data.previewUrl, '_blank');
+      const popupBlocked = !newWindow || newWindow.closed || typeof newWindow.closed === 'undefined';
+
+      // Show alert banner on page in case popup is blocked or for easy access
+      showPreviewAlert(place.name, data.previewUrl, popupBlocked);
+
+      btn.disabled = false;
+      btn.innerHTML = `<span>Regenerate</span>`;
+
+    } catch (err) {
+      console.error('[Generate Preview Error]', err);
+      alert('Error generating preview: ' + err.message);
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+
+  // Display Preview Alert Banner
+  function showPreviewAlert(placeName, previewUrl, popupBlocked) {
+    if (!previewAlert) return;
+    previewAlertMessage.textContent = popupBlocked
+      ? `Popup was blocked. Preview ready for "${placeName}":`
+      : `Website preview generated for "${placeName}"!`;
+    previewAlertLink.href = previewUrl;
+    previewAlert.classList.remove('hidden');
   }
 
   // Handle Header Sort Icons
@@ -236,7 +391,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Handle Excel Download
+  // Handle Excel Download (exports exactly the currently displayed rows)
   async function handleExcelDownload() {
     const displayedRows = getFilteredAndSortedPlaces();
     if (displayedRows.length === 0) return;
