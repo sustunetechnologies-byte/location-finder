@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Location Finder & Website Health Explorer</title>
-  <meta name="description" content="Discover nearby places, check their website availability, and export detailed results to Excel using TomTom API.">
-  <!-- Google Fonts: Inter -->
+  <title>Location Finder &amp; Website Health Explorer</title>
+  <meta name="description" content="Discover nearby places via Google Places or TomTom, check website availability, and export results to Excel.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -24,7 +23,7 @@
         </div>
         <div>
           <h1>Location Finder</h1>
-          <p class="subtitle">TomTom POI discovery with parallel website verification</p>
+          <p class="subtitle">Google Places &amp; TomTom POI discovery with website verification</p>
         </div>
       </div>
     </header>
@@ -39,7 +38,7 @@
               <circle cx="11" cy="11" r="8"/>
               <path d="m21 21-4.3-4.3"/>
             </svg>
-            <input type="text" id="location-input" placeholder="e.g. Indiranagar, Bengaluru" required autocomplete="off">
+            <input type="text" id="location-input" placeholder="e.g. Kumta, Karnataka" required autocomplete="off">
           </div>
         </div>
 
@@ -47,9 +46,19 @@
           <label for="category-select">Category</label>
           <div class="select-wrapper">
             <select id="category-select">
-              <option value="both" selected>Both (Restaurants & Stays)</option>
+              <option value="both" selected>Both (Restaurants &amp; Stays)</option>
               <option value="restaurants">Restaurants</option>
               <option value="stays">Stays (Hotels)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group select-group">
+          <label for="source-select">Data Source</label>
+          <div class="select-wrapper">
+            <select id="source-select">
+              <option value="google" selected>Google Places</option>
+              <option value="tomtom">TomTom</option>
             </select>
           </div>
         </div>
@@ -93,7 +102,13 @@
           </svg>
         </div>
         <h3 id="error-title">Unable to complete search</h3>
-        <p id="error-message">Location not found. Please verify the place name and try again.</p>
+        <p id="error-message">An error occurred. Please try again.</p>
+        <div id="fallback-banner" class="fallback-banner hidden">
+          <p id="fallback-msg">Google Places failed. Would you like to try TomTom instead?</p>
+          <button type="button" id="fallback-btn" class="btn btn-secondary" style="margin-top:0.75rem;">
+            <span>Switch to TomTom &amp; Retry</span>
+          </button>
+        </div>
       </div>
 
       <!-- Empty Initial State -->
@@ -104,8 +119,8 @@
             <circle cx="12" cy="10" r="3"/>
           </svg>
         </div>
-        <h3>Discover Places & Website Status</h3>
-        <p>Enter a neighborhood or city (e.g. "Indiranagar, Bengaluru") to discover nearby places and export details to Excel.</p>
+        <h3>Discover Places &amp; Website Status</h3>
+        <p>Enter a neighborhood or city to discover nearby places. Google Places is the default data source; switch to TomTom as a fallback.</p>
       </div>
 
       <!-- Empty Search Results State -->
@@ -117,12 +132,12 @@
           </svg>
         </div>
         <h3>No places found</h3>
-        <p>No places found, try a larger area or a different name.</p>
+        <p>No places found. Try a larger area or a different name.</p>
       </div>
 
       <!-- Data Section -->
       <div id="results-wrapper" class="hidden">
-        <!-- Preview Notification Alert (shown when website is generated or if popup blocked) -->
+        <!-- Preview Notification Alert -->
         <div id="preview-alert" class="preview-alert hidden" role="alert">
           <div class="preview-alert-body">
             <svg class="preview-alert-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -136,7 +151,7 @@
               <span>Open Preview</span>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             </a>
-            <button type="button" id="preview-alert-close" class="preview-alert-dismiss" title="Dismiss notification">&times;</button>
+            <button type="button" id="preview-alert-close" class="preview-alert-dismiss" title="Dismiss">&times;</button>
           </div>
         </div>
 
@@ -145,6 +160,7 @@
           <div class="summary-info">
             <span id="summary-line" class="summary-text">0 places found</span>
             <span id="cache-badge" class="badge badge-info hidden">Cached</span>
+            <span id="source-badge" class="badge badge-source hidden"></span>
           </div>
 
           <div class="controls-group">
@@ -173,6 +189,7 @@
                 <th data-sort="type" class="sortable">Type <span class="sort-icon">↕</span></th>
                 <th data-sort="address" class="sortable">Address <span class="sort-icon">↕</span></th>
                 <th>Phone</th>
+                <th data-sort="rating" class="sortable">Rating <span class="sort-icon">↕</span></th>
                 <th data-sort="website" class="sortable">Website <span class="sort-icon">↕</span></th>
                 <th data-sort="websiteStatus" class="sortable">Website Status <span class="sort-icon">↕</span></th>
                 <th>Opening Hours</th>
@@ -189,8 +206,76 @@
     </main>
 
     <footer class="app-footer">
-      <p>Powered by TomTom Search API & Express</p>
+      <p>Powered by Google Places (New) &amp; TomTom Search API · Express</p>
     </footer>
+  </div>
+
+  <!-- Enrich / Generate Website Modal -->
+  <div id="enrich-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modal-title" class="modal-title">Review &amp; Verify Before Generating</h2>
+        <button type="button" id="modal-close" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+
+      <div id="modal-loading" class="modal-loading hidden">
+        <div class="spinner"></div>
+        <p>Fetching place details from Google…</p>
+      </div>
+
+      <div id="modal-error" class="modal-error hidden">
+        <p id="modal-error-msg"></p>
+      </div>
+
+      <form id="enrich-form" class="hidden">
+        <div id="ops-warning" class="ops-warning hidden">
+          ⚠️ This place is not currently listed as OPERATIONAL on Google Maps. Generation is blocked.
+        </div>
+        <div id="has-website-warning" class="has-website-warning hidden">
+          ⚠️ This place already has its own website. Are you sure you want to generate a preview anyway?
+        </div>
+
+        <!-- Fetched Data Review -->
+        <div class="modal-section">
+          <h3 class="modal-section-title">Fetched Data (read-only)</h3>
+          <div class="review-grid" id="review-fields"></div>
+        </div>
+
+        <!-- No Photos Note -->
+        <div id="no-photos-note" class="missing-data-box hidden">
+          No photos or reviews available for this key. Add photos later with a billing-enabled key or use owner-approved photos.
+        </div>
+
+        <!-- Menu Items / Room Types -->
+        <div class="modal-section" id="user-items-section">
+          <h3 class="modal-section-title" id="user-items-label">Menu Items (optional)</h3>
+          <div id="user-items-list" class="user-items-list"></div>
+          <button type="button" id="add-item-btn" class="btn-add-item">+ Add item</button>
+        </div>
+
+        <!-- WhatsApp Number -->
+        <div class="modal-section">
+          <h3 class="modal-section-title">WhatsApp Number (optional)</h3>
+          <p class="modal-hint">Leave blank to use the phone number from Google. Must be a 10-digit Indian mobile (starts with 6–9).</p>
+          <input type="tel" id="whatsapp-input" class="modal-input" placeholder="e.g. 9876543210" maxlength="15">
+          <span id="whatsapp-validation" class="validation-msg"></span>
+        </div>
+
+        <!-- Verification Checkboxes -->
+        <div class="modal-section verification-section">
+          <h3 class="modal-section-title">Verification (required)</h3>
+          <p class="modal-hint">An intern must tick each checkbox before the Generate button is enabled.</p>
+          <div id="verification-checks" class="verification-list"></div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" id="modal-cancel-btn" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="modal-generate-btn" class="btn btn-primary" disabled>
+            <span>Generate Website</span>
+          </button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <script src="app.js"></script>
