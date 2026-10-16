@@ -50,9 +50,32 @@ document.addEventListener('DOMContentLoaded', () => {
   const addItemBtn = document.getElementById('add-item-btn');
   const whatsappInput = document.getElementById('whatsapp-input');
   const whatsappValidation = document.getElementById('whatsapp-validation');
+  const designSelect = document.getElementById('design-select');
+  const designAutoInfo = document.getElementById('design-auto-info');
   const verificationChecks = document.getElementById('verification-checks');
   const modalGenerateBtn = document.getElementById('modal-generate-btn');
   const modalCancelBtn = document.getElementById('modal-cancel-btn');
+
+  const THEME_NAMES = {
+    'fullscreen-overlay': 'Full-screen Hero with Overlay',
+    'split-hero': 'Split Hero',
+    'magazine-grid': 'Magazine Grid',
+    'minimal-luxury': 'Minimal Luxury',
+    'resort-nature': 'Resort & Nature',
+    'modern-dark': 'Modern Dark'
+  };
+  const THEME_KEYS = Object.keys(THEME_NAMES);
+
+  function getAutoThemeName(placeId, name) {
+    let hash = 5381;
+    const str = String(placeId || name || 'default');
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) + hash) + str.charCodeAt(i);
+      hash = hash & 0x7FFFFFFF;
+    }
+    const idx = Math.abs(hash) % THEME_KEYS.length;
+    return { key: THEME_KEYS[idx], name: THEME_NAMES[THEME_KEYS[idx]] };
+  }
 
   // ──────────────────────────────────────────────
   // Application State
@@ -79,6 +102,17 @@ document.addEventListener('DOMContentLoaded', () => {
   activeOnlyCheckbox.addEventListener('change', () => { filterMode = 'all'; renderTableAndSummary(); });
   downloadExcelBtn.addEventListener('click', handleExcelDownload);
   previewAlertClose?.addEventListener('click', () => previewAlert.classList.add('hidden'));
+
+  designSelect?.addEventListener('change', () => {
+    if (!designAutoInfo) return;
+    if (designSelect.value === 'auto') {
+      const pId = modalEnriched?.id || modalPlace?.placeId || modalPlace?.id;
+      const autoTheme = getAutoThemeName(pId, modalEnriched?.name || modalPlace?.name);
+      designAutoInfo.textContent = `Auto will apply: ${autoTheme.name}`;
+    } else {
+      designAutoInfo.textContent = `Manual override: ${THEME_NAMES[designSelect.value] || designSelect.value}`;
+    }
+  });
 
   // Fallback to TomTom
   fallbackBtn?.addEventListener('click', () => {
@@ -484,10 +518,18 @@ document.addEventListener('DOMContentLoaded', () => {
       </label>
     `).join('');
 
-    // Reset button state
+    // Reset button state & design dropdown
     modalGenerateBtn.disabled = true;
     whatsappInput.value = '';
     whatsappValidation.textContent = '';
+    if (designSelect) {
+      designSelect.value = 'auto';
+      const pId = details?.id || place.placeId || place.id;
+      const autoTheme = getAutoThemeName(pId, details?.name || place.name);
+      if (designAutoInfo) {
+        designAutoInfo.textContent = `Auto will apply: ${autoTheme.name}`;
+      }
+    }
   }
 
   function renderUserItems() {
@@ -585,6 +627,8 @@ document.addEventListener('DOMContentLoaded', () => {
         coordinates: details?.location || place.coordinates,
         mapLink: details?.mapLink || place.mapLink,
         enriched: details || null,
+        placeId: details?.id || place.placeId || place.id || null,
+        design: designSelect ? designSelect.value : 'auto',
         menuItems: userItems.filter(i => i.name),
         roomTypes: userItems.filter(i => i.name)
       };
