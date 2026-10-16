@@ -246,11 +246,104 @@
           No photos or reviews available for this key. Add photos later with a billing-enabled key or use owner-approved photos.
         </div>
 
-        <!-- Menu Items / Room Types -->
-        <div class="modal-section" id="user-items-section">
-          <h3 class="modal-section-title" id="user-items-label">Menu Items (optional)</h3>
+        <!-- Photo Assignment (Section 1) -->
+        <div class="modal-section hidden" id="photo-assignment-section">
+          <div class="modal-section-header">
+            <h3 class="modal-section-title">Photo Assignment (optional, up to 12 photos)</h3>
+            <span class="source-tag">Source: pin photo</span>
+          </div>
+          <p class="modal-hint">Assign each pin photo as Hero (width 1200), Gallery, Room photo, or Menu/Food. Images are lazy-loaded.</p>
+          <div id="photos-assignment-grid" class="photos-assignment-grid"></div>
+        </div>
+
+        <!-- Rooms Editor for Stays (Section 1) -->
+        <div class="modal-section hidden" id="rooms-editor-section">
+          <div class="modal-section-header">
+            <h3 class="modal-section-title">Rooms &amp; Rates (optional)</h3>
+            <span class="source-tag">Source: pin photo / owner confirmed</span>
+          </div>
+          <p class="modal-hint">Enter room types with tariffs, specs, and amenities. A card will be created for each room.</p>
+          <div id="rooms-list" class="rooms-list"></div>
+          <button type="button" id="add-room-btn" class="btn-add-item">+ Add Room Type</button>
+        </div>
+
+        <!-- Menu Editor for Restaurants (Section 1) -->
+        <div class="modal-section hidden" id="menu-editor-section">
+          <div class="modal-section-header">
+            <h3 class="modal-section-title">Menu Items &amp; Prices (optional)</h3>
+            <span class="source-tag">Source: pin photo / owner confirmed</span>
+          </div>
+          <p class="modal-hint">Add menu items manually or use the bulk paste tool below.</p>
+          
+          <!-- Bulk Paste Box -->
+          <div class="bulk-paste-container">
+            <div class="bulk-paste-toggle-row">
+              <button type="button" id="toggle-bulk-paste-btn" class="btn-bulk-toggle">📋 Bulk Paste Menu Items</button>
+              <span class="bulk-format-hint">Format: Category | Item | Price | Veg/Non-veg | Description (optional)</span>
+            </div>
+            <div id="bulk-paste-box" class="bulk-paste-box hidden">
+              <textarea id="bulk-menu-text" class="modal-input bulk-textarea" rows="4" placeholder="Starters | Paneer Tikka | ₹260 | Veg | Tandoor grilled cottage cheese
+Mains | Butter Chicken | ₹380 | Non-Veg | Creamy tomato gravy
+Breads | Garlic Naan | ₹60 | Veg | Fresh clay oven baked
+Desserts | Gulab Jamun | ₹120 | Veg | Warm milk solids in saffron syrup"></textarea>
+              <div class="bulk-actions-row">
+                <button type="button" id="parse-bulk-btn" class="btn btn-sm btn-secondary">Parse Lines</button>
+                <span id="bulk-parse-status" class="bulk-status"></span>
+              </div>
+              <div id="bulk-preview-wrapper" class="bulk-preview-wrapper hidden">
+                <div class="bulk-preview-header">
+                  <span>Parsed Items Preview (Review and edit before adding):</span>
+                </div>
+                <div id="bulk-preview-table-container" class="bulk-preview-table-container"></div>
+                <button type="button" id="accept-bulk-btn" class="btn btn-sm btn-primary">✓ Accept All Into Menu</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="menu-items-list" class="menu-items-list"></div>
+          <button type="button" id="add-menu-item-btn" class="btn-add-item">+ Add Single Menu Item</button>
+        </div>
+
+        <!-- Legacy fallback container for backwards compatibility -->
+        <div class="modal-section hidden" id="user-items-section">
+          <h3 class="modal-section-title" id="user-items-label">Items</h3>
           <div id="user-items-list" class="user-items-list"></div>
           <button type="button" id="add-item-btn" class="btn-add-item">+ Add item</button>
+        </div>
+
+        <!-- Optional Fields (Section 1) -->
+        <div class="modal-section" id="optional-fields-section">
+          <div class="modal-section-header">
+            <h3 class="modal-section-title">Additional Links &amp; Policies (optional)</h3>
+            <span class="source-tag">Source: pin photo / owner confirmed</span>
+          </div>
+          <p class="modal-hint">A button or section appears on the page only if its field has a value.</p>
+          <div class="optional-fields-grid">
+            <div class="optional-field-row" id="field-order-link-wrap">
+              <label class="optional-label" for="opt-ordering-link">Online Ordering Link</label>
+              <input type="url" id="opt-ordering-link" class="modal-input" placeholder="https://zomato.com/... or ordering URL">
+            </div>
+            <div class="optional-field-row" id="field-reserve-link-wrap">
+              <label class="optional-label" for="opt-reservation-link">Table Reservation Link</label>
+              <input type="url" id="opt-reservation-link" class="modal-input" placeholder="https://eazydiner.com/... or reservation URL">
+            </div>
+            <div class="optional-field-row" id="field-booking-link-wrap">
+              <label class="optional-label" for="opt-booking-link">Direct Booking Link</label>
+              <input type="url" id="opt-booking-link" class="modal-input" placeholder="https://booking.com/... or direct booking portal">
+            </div>
+            <div class="optional-field-row">
+              <label class="optional-label" for="opt-instagram">Instagram</label>
+              <input type="text" id="opt-instagram" class="modal-input" placeholder="@handle or https://instagram.com/...">
+            </div>
+            <div class="optional-field-row">
+              <label class="optional-label" for="opt-checkin-out">Check-in / Check-out Times</label>
+              <input type="text" id="opt-checkin-out" class="modal-input" placeholder="e.g. Check-in: 1:00 PM | Check-out: 11:00 AM">
+            </div>
+            <div class="optional-field-row optional-field-full">
+              <label class="optional-label" for="opt-house-rules">House Rules / Policies</label>
+              <textarea id="opt-house-rules" class="modal-input" rows="2" placeholder="e.g. No smoking inside rooms. Quiet hours after 10 PM. Valid government photo ID required at check-in."></textarea>
+            </div>
+          </div>
         </div>
 
         <!-- WhatsApp Number -->
@@ -264,19 +357,18 @@
         <!-- Design Selection -->
         <div class="modal-section" id="design-selection-section">
           <h3 class="modal-section-title">Design Theme</h3>
-          <p class="modal-hint">Choose a layout theme or keep Auto (determined from Google Place ID).</p>
+          <p class="modal-hint">Choose a layout theme or keep Auto (determined from Google place types &amp; Place ID).</p>
           <div class="select-wrapper">
             <select id="design-select" class="modal-select">
-              <option value="auto">Auto (Deterministic from Place ID)</option>
-              <option value="fullscreen-overlay">Full-screen Hero with Overlay</option>
-              <option value="split-hero">Split Hero</option>
-              <option value="magazine-grid">Magazine Grid</option>
-              <option value="minimal-luxury">Minimal Luxury</option>
-              <option value="resort-nature">Resort &amp; Nature</option>
-              <option value="modern-dark">Modern Dark</option>
+              <!-- Dynamically populated based on Stay vs Restaurant -->
             </select>
           </div>
           <p id="design-auto-info" class="modal-hint" style="color:#60A5FA;margin-top:0.25rem;"></p>
+        </div>
+
+        <!-- Token Size Warning (Section 2) -->
+        <div id="token-size-warning" class="missing-data-box hidden" style="border-color:#EF4444;background:rgba(239,68,68,0.1);color:#FCA5A5;">
+          ⚠️ <strong>Link data too large:</strong> The entered data is too large for a preview URL. Please remove some photos, shorten descriptions, or reduce menu items.
         </div>
 
         <!-- Verification Checkboxes -->

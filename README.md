@@ -1,6 +1,6 @@
-# Location Finder & Website Preview Generator
+# Location Finder & Hospitality Website Preview Generator
 
-A full-stack Node.js + Express application that discovers nearby places (Restaurants, Stays, or Both) using the **Google Places (New) API** and **TomTom Search API**, tests website availability, verifies business facts, and generates beautiful, high-converting website previews for businesses without an active web presence.
+A full-stack Node.js + Express web application that discovers nearby hospitality businesses (Restaurants, Stays, or Both) using the **Google Places (New) API** and **TomTom Search API**, evaluates website availability, verifies business facts, allows structured extra data entry, and generates professional, hospitality-grade website previews for businesses without an active web presence.
 
 ---
 
@@ -8,87 +8,134 @@ A full-stack Node.js + Express application that discovers nearby places (Restaur
 
 ### 1. Smart Place Search & Verification
 - **Dual Providers**: Google Places (New) Text Search with automatic fallback to TomTom POI Category API.
-- **Auto-Expanding Radius**: Dynamically expands search area if initial radius yields fewer than 5 places.
+- **Auto-Expanding Radius**: Dynamically expands search radius (2 km → 5 km → 10 km) if initial search yields fewer than 5 places.
 - **Parallel Website Availability Check**: Rapid HEAD/GET verification classifying sites into *Active*, *Active (restricted)*, *Inactive*, or *Not listed*.
 - **10-Minute Query Cache**: In-memory caching for duplicate searches to preserve quota.
-- **Interactive Review Modal**:
-  - Read-only review of verified business data.
-  - Optional user-added menu items or room rates with citation sources (`owner confirmed` / `pin photo`).
-  - Optional WhatsApp number override (validated for 10-digit Indian mobile starting with 6–9).
-  - Intern verification checkboxes required before generation.
-  - **Design Theme Selector**: Auto (deterministic from Google Place ID) with manual override for any theme.
-
-### 2. Website Preview Design System (Stays & Restaurants)
-Generated previews at `/preview/:token` are self-contained, lightning-fast, and run completely in-memory with zero file writes.
-
-#### Bank of 6 Distinct Layout Themes:
-1. **Full-screen Hero with Overlay (`fullscreen-overlay`)**: Immersive full-viewport hero backdrop with frosted glass container and centered storytelling.
-2. **Split Hero (`split-hero`)**: Modern editorial two-column layout with left typography and right framed media stage.
-3. **Magazine Grid (`magazine-grid`)**: High-end editorial publication style with issue kicker, prominent titles, and structured column blocks.
-4. **Minimal Luxury (`minimal-luxury`)**: Spacious, serif-driven aesthetic with generous whitespace and refined hairline dividers.
-5. **Resort & Nature (`resort-nature`)**: Soft organic shapes, asymmetrical rounded corners, and relaxing tones.
-6. **Modern Dark (`modern-dark`)**: Sleek dark mode with glassmorphic cards, glowing borders, and vibrant ambient highlights.
-
-#### 6 Curated Colour Palettes:
-- **Ocean Azure**: `#08101E` midnight background with `#0EA5E9` sky blue accents and `#14B8A6` teal glow.
-- **Warm Terracotta**: `#140E0C` dark espresso background with `#EA580C` warm flame orange.
-- **Forest Moss**: `#0A130D` deep forest with `#22C55E` fresh leaf green and `#84CC16` lime highlights.
-- **Sandstone & Brass**: `#151518` carbon stone with `#D4AF37` royal gold and warm brass borders.
-- **Sunset Rose**: `#170B12` dark berry with `#E11D48` vibrant crimson and rose glow.
-- **Modern Obsidian**: `#0A0D14` obsidian slate with `#06B6D4` electric cyan and azure glow.
-
-#### 3 Distinct Typography Pairings:
-- **Outfit + Inter**: Modern geometric sans-serif for clean, high-tech hospitality.
-- **Playfair Display + Plus Jakarta Sans**: Elegant high-contrast serif for luxury resorts and boutique stays.
-- **DM Serif Display + Inter**: Rich heritage editorial display pairing.
-
-#### Deterministic Selection & Token Encoding:
-- The design theme, colour palette, and font pairing are derived deterministically from a 32-bit FNV-1a hash of the Google Place ID (or business name).
-- The same stay **always** receives the exact same cohesive design.
-- Different stays automatically receive visually diverse designs.
-- Overriding the theme in the review modal encodes the choice into the preview token prefix (`fso_`, `sph_`, `mag_`, `lux_`, `nat_`, `drk_`, or `aut_` + 28 base64url characters = 32 chars).
-
-### 3. Dynamic UI & Animations (No External Libraries)
-- **Parallax & Ken Burns**: Subtle zooming parallax animation when Google Maps pin photos are available.
-- **Abstract Gradient Mesh**: For places with no photos, renders an animated CSS radial-gradient mesh (never AI or stock photos, no `<img>` tags).
-- **Scroll-Reveal Animations**: Native `IntersectionObserver` revealing sections with staggered micro-delays.
-- **Micro-Interactions**: Card hover lift & ambient shadow, gallery zoom, button ripple effects, interactive amenity chips, and badge transitions.
-- **Sticky Navigation Bar with Scroll-Spy**: Sticky header positioned smoothly below the top disclaimer banner that tracks active sections as you scroll.
-- **Accessible Lightbox**: Keyboard-navigable (`Escape`, `ArrowLeft`, `ArrowRight`), touch swipe gesture support for mobile, and required Google author attributions.
-- **Live Opening Hours Status**: Parses hours data to display a pulsing `Open now` or `Closed` status badge and highlights the current day of the week.
-- **Mobile Floating Action Bar**: Fixed bottom bar on screens `<641px` with Call, WhatsApp (only for valid mobile numbers), Directions, and quick Enquire triggers.
-- **Accessibility**: Strict respect for `prefers-reduced-motion` (instantly disables animations) and WCAG AA contrast compliance.
-
-### 4. Strict Content & Security Rules
-- **Never Invent Facts**: All content is strictly derived from Google Maps / TomTom data or explicitly entered by the user. If data is absent, the corresponding section is hidden entirely.
-- **Price Levels**: Rendered strictly as `₹` symbols (`₹` to `₹₹₹₹`), never fabricated currency amounts.
-- **Indian Mobile WhatsApp Rule**: WhatsApp links are generated only for verified 10-digit Indian mobile numbers starting with 6–9. Landlines (e.g. `080`, `022`, etc.) receive Call buttons only.
-- **Photos**: Served strictly from the Google Maps pin via `/api/photo` proxy (no API keys exposed to browser).
-- **Disclaimer Banners**: Exact legal disclaimer pinned at the top and footer of every preview.
-- **SEO & Indexing Guard**: `<meta name="robots" content="noindex, nofollow">`, `X-Robots-Tag: noindex, nofollow`, and `robots.txt` Disallow rule.
-- **XSS Protection**: All user-provided and API-returned values are HTML-escaped.
+- **Excel Export**: Clean spreadsheet export formatted with ExcelJS including places, health status, ratings, and map links.
 
 ---
 
-## 🚀 Getting Started
+### 2. Review Window: Extra Data Entry & Verification
+Every preview undergoes intern verification in the review modal before generation:
+- **Photo Assignment (up to 12 photos)**:
+  - Fetched via Google Maps pin thumbnails (through the secure `/api/photo` proxy).
+  - Interns can tag each photo as **Hero** (rendered at max width 1200px), **Gallery** (width 800px), **Room Photo** (assigned to a specific room), or **Menu/Food**.
+  - All images are lazy-loaded to optimize browser performance and API credits.
+- **Rooms Editor (Stays)**:
+  - Add room types with: Room Name, Size (sq ft), Capacity, Bed Type, Rate / Tariff per night, Amenities, Short Description, and citation source note (*Owner confirmed* / *Pin photo*).
+- **Menu Editor (Restaurants)**:
+  - Manual entry: Category, Item Name, Price, Veg/Non-Veg/Egg tag, Description, and citation source note (*Owner confirmed* / *Pin photo*).
+  - **Bulk Paste Tool**: Paste multiple menu lines in the standard pipe-delimited format:
+    ```text
+    Category | Item | Price | Veg/Non-veg | Description (optional)
+    ```
+    Parses lines into an interactive preview table where interns can edit or delete items before accepting all into the menu.
+- **Optional Hospitality Fields**:
+  - Online Ordering Link (Zomato / Swiggy / direct)
+  - Table Reservation Link (EazyDiner / Dineout / partner portal)
+  - Direct Booking Link (Booking.com / property booking engine)
+  - Instagram handle or profile URL
+  - Check-in and Check-out timings
+  - Property House Rules & Policies
+  - *Rule*: Buttons or sections appear on the page **only if** their respective field has a value.
+- **Dynamic Verification Checkboxes**:
+  - The "Generate Website" button remains disabled until every shown field (read-only fetched fields, photo assignments, room types, menu items, and optional links) is individually verified and checked.
+- **WhatsApp Mobile Validation**:
+  - Validates Indian mobile numbers (10 digits starting with 6, 7, 8, or 9 formatted as `+91`).
+  - Landlines (e.g. `080` Bengaluru) receive phone Call buttons only; WhatsApp is omitted.
 
-### Prerequisites
-- Node.js (v18 or higher)
-- Google Places API Key (`GOOGLE_PLACES_API_KEY`) and/or TomTom API Key (`TOMTOM_API_KEY`)
+---
 
-### Installation & Run
+### 3. Preview Link Compression & URL Size Enforcement
+- URL tokens carry all business and entered data directly in the URL using **zlib deflate** compression and **base64url** encoding.
+- Hard limit of **7500 characters** enforced on token length.
+- If entered data exceeds the limit, the server rejects generation with HTTP 400 and the review modal displays a clear warning prompting the intern to reduce photos, trim descriptions, or reduce menu items.
+- Tested and verified with 40 menu items and 6 detailed rooms.
+
+---
+
+### 4. 6 Stay Layout Themes (Hospitality Grade)
+Layouts differ fundamentally in structure, section hierarchy, hero type, and components:
+1. **Eco-lodge / Nature (`eco-lodge`)**: Organic rounded accents, earthy forest tones, full-bleed hero with Ken Burns zoom, and focus on sustainability amenities.
+2. **Urban Sleek (`urban-sleek`)**: Modern two-column grid layout, high-contrast monochrome aesthetic, split hero with typography on left and media stage on right.
+3. **Heritage / Homestay (`heritage-homestay`)**: Warm serif editorial typography, textured story sections, magazine-style quote highlights, and traditional hospitality layout.
+4. **Beach / Resort (`beach-resort`)**: Bright and airy ocean tones, fluid wave dividers, full-viewport hero backdrop, and horizontal photo showcase.
+5. **Luxury (`luxury`)**: Dark obsidian with champagne gold accents, cinematic minimal hero with hairline dividers, and large room showcases.
+6. **Budget / PG / Hostel (`budget-hostel`)**: Information-first layout, practical cards highlighting room tariff, rules, and facilities.
+
+#### Automatic Determinism & Manual Override:
+- Selected automatically based on Google place types, name keywords, and an FNV-1a hash of the Place ID. The same place ID always gets the exact same layout.
+- Review window dropdown allows overriding with any theme.
+
+#### Stay Components:
+- **Hero**: Atmospheric full-bleed hero with Ken Burns zoom animation. If no photos exist, renders an animated SVG gradient mesh with zero `<img>` tags.
+- **Sticky Booking Widget**: Prominent booking form with Check-in, Check-out, Guests, and Room Type. Submits a prefilled WhatsApp booking request to the property or triggers Call for landlines.
+- **Rooms & Rates Grid**: Room cards with specs, tariffs, amenities, and photo thumbnail. Clicking a card opens a modal / drawer with complete room specs (also accessible via URL hash `#room-{i}`).
+- **Photo Gallery & Lightbox**: Responsive masonry grid with hover zoom, keyboard navigation (`Escape`, `ArrowLeft`, `ArrowRight`), touch swipe support on mobile, and Google author attributions.
+- **Verified Amenities**: Highlight chips derived strictly from true Google flags (parking, pet-friendly, wheelchair accessibility, payment methods).
+- **Reviews Section**: Authentic Google contributor reviews with star ratings and Google attribution.
+- **Opening Hours Table**: Live table with current day highlighted with a `TODAY` badge and live pulsing status pill (`Open now` / `Closed`).
+- **Location & Directions**: Embedded Google Maps iframe with direct "Get directions on Google Maps" button.
+- **Quick Answers FAQ**: Accessible `<details>` accordion built exclusively from verified facts.
+- **Floating Actions**: Desktop floating call/WhatsApp pills and fixed mobile bottom action bar (`<641px`).
+
+---
+
+### 5. 6 Restaurant Layout Themes (Hospitality Grade)
+1. **Fine Dining / Steakhouse (`fine-dining`)**: Dark, warm ambient lighting accents, cinematic luxury hero, and reservation-first navigation.
+2. **Casual Cafe (`casual-cafe`)**: Bright, clean typography, playful menu cards, and focus on breakfast/coffee highlights.
+3. **Family Restaurant (`family-restaurant`)**: Warm terracotta tones, large prominent menu cards, and multi-cuisine highlights.
+4. **Bar & Pub (`bar-pub`)**: Dark obsidian mode with electric accents, bold typography, and taproom/craft beverage highlights.
+5. **Traditional Indian (`traditional-indian`)**: Earthy palette, heritage serif typography, and tandoor/thali highlights.
+6. **Bakery / Fast Food (`bakery-fast-food`)**: Colorful, large touch-friendly buttons, and quick-order CTA focus.
+
+#### Restaurant Components:
+- **Hero**: Hero banner with name, rating, review count, price level in ₹ symbols, cuisine type, and live open/closed badge.
+- **Sticky Top Navigation**: Persistent navigation with "Reserve a Table", "Order Online", "Call", "Directions", and "Hours" buttons. Positioned below the disclaimer banner so it never covers it.
+- **Interactive HTML Menu**:
+  - Category tabs ("All", "Starters", "Mains", "Desserts", etc.).
+  - Real-time search filter box.
+  - Pure Veg / Non-Veg toggle buttons.
+  - Fallback to Menu Photos gallery if no typed menu exists, or "Contact us for the menu" if neither is available.
+- **Table Reservation Modal**: Interactive reservation form with Date, Time, and Guest selection that opens WhatsApp with a prefilled reservation message or dials reception for landlines.
+- **Food & Ambiance Gallery**: Lightbox with hover zoom using only pin photos.
+- **Highlights**: Verified features chips (dine-in, takeout, delivery, outdoor seating, reservations, vegetarian food).
+
+---
+
+### 6. Non-Negotiable Rules & Security Controls
+- **Never Invent Facts**: All content is strictly derived from Google Maps pin data or typed by the intern. Empty sections are cleanly hidden.
+- **No Stock or AI Images**: Zero stock/AI imagery. Photos are served only through the server-side `/api/photo` proxy.
+- **Price Levels**: Displayed strictly as `₹` symbols (`₹` to `₹₹₹₹`).
+- **Legal Preview Disclaimer**: Pinned top banner (`#top-disc`) and footer disclaimer:
+  > *"Preview prepared for {Business Name} by Susunetech. This is a draft preview created for demonstration purposes only. It is not the official website of the business and has not been approved or published by the owner."*
+- **SEO & Indexing Guard**: `<meta name="robots" content="noindex, nofollow">`, `X-Robots-Tag: noindex, nofollow` header on `/preview/:token`, and `Disallow: /preview` in `robots.txt`.
+- **Zero API Key Leakage**: API keys remain strictly server-side in environment variables and never appear in client-side HTML, URLs, or error messages.
+- **HTML Escaping**: All user-provided and API strings are escaped against XSS attacks.
+- **Accessibility & Responsiveness**: Fluid typography (`clamp()`), touch targets >= 44px, tested at 360px, 768px, 1024px, and 1440px widths, and full compliance with `prefers-reduced-motion`.
+
+---
+
+## 🛠️ Testing
+
+The project includes automated verification test suites:
+
 ```bash
-npm install
-npm start
-```
-The app will start at `http://localhost:3000`.
-
-### Running Tests
-Execute the comprehensive test suites:
-```bash
+# Run all automated test suites together
 node run_all_tests.js
 ```
-Runs:
-- `test_run.js`: Deep verification of phone normalization, WhatsApp logic, and templates.
-- `test_features.js`: Automated testing for search, export, and preview endpoints.
-- `test_redesign.js`: Redesign tests verifying all 6 themes, deterministic hashing, token encoding, Ken Burns hero, photo lightbox with swipe, live hours, and mobile responsiveness.
+
+Included test suites:
+- `test_all_features.js`: Comprehensive suite testing 4 stays, 4 restaurants, determinism, all 12 theme overrides, 40-item menu and 6-room compression within 7500 chars, 7500 char rejection, interactive menu filtering, booking forms, room drawer deep-linking, lightbox, FAQ accordion, landline vs mobile rules, and disclaimers.
+- `test_redesign.js`: Redesign suite testing layout themes, Ken Burns hero, SVG gradient fallback, lightbox gestures, live hours table, and mobile floating action bar.
+- `test_features.js`: Automated testing for search endpoint, website health status checks, Excel export, and robots headers.
+- `test_run.js`: Deep verification of phone normalization, landline vs WhatsApp logic, and templates.
+
+---
+
+## 💻 Tech Stack
+- **Backend**: Node.js, Express
+- **APIs**: Google Places (New) API, TomTom Search API
+- **Export**: ExcelJS
+- **Frontend**: Vanilla HTML5, CSS3 (CSS custom properties, CSS Grid, Flexbox), Vanilla JavaScript (no external CDNs or heavy UI libraries)
+- **Deployment**: Vercel-ready with stateless in-memory compression and proxy routing.

@@ -56,25 +56,101 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalGenerateBtn = document.getElementById('modal-generate-btn');
   const modalCancelBtn = document.getElementById('modal-cancel-btn');
 
-  const THEME_NAMES = {
-    'fullscreen-overlay': 'Full-screen Hero with Overlay',
-    'split-hero': 'Split Hero',
-    'magazine-grid': 'Magazine Grid',
-    'minimal-luxury': 'Minimal Luxury',
-    'resort-nature': 'Resort & Nature',
-    'modern-dark': 'Modern Dark'
-  };
-  const THEME_KEYS = Object.keys(THEME_NAMES);
+  // Section 1: Extra Data Entry Elements
+  const photoAssignmentSection = document.getElementById('photo-assignment-section');
+  const photosAssignmentGrid = document.getElementById('photos-assignment-grid');
 
-  function getAutoThemeName(placeId, name) {
-    let hash = 5381;
-    const str = String(placeId || name || 'default');
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) + hash) + str.charCodeAt(i);
-      hash = hash & 0x7FFFFFFF;
+  const roomsEditorSection = document.getElementById('rooms-editor-section');
+  const roomsList = document.getElementById('rooms-list');
+  const addRoomBtn = document.getElementById('add-room-btn');
+
+  const menuEditorSection = document.getElementById('menu-editor-section');
+  const menuItemsList = document.getElementById('menu-items-list');
+  const addMenuItemBtn = document.getElementById('add-menu-item-btn');
+
+  const toggleBulkPasteBtn = document.getElementById('toggle-bulk-paste-btn');
+  const bulkPasteBox = document.getElementById('bulk-paste-box');
+  const bulkMenuText = document.getElementById('bulk-menu-text');
+  const parseBulkBtn = document.getElementById('parse-bulk-btn');
+  const bulkParseStatus = document.getElementById('bulk-parse-status');
+  const bulkPreviewWrapper = document.getElementById('bulk-preview-wrapper');
+  const bulkPreviewTableContainer = document.getElementById('bulk-preview-table-container');
+  const acceptBulkBtn = document.getElementById('accept-bulk-btn');
+
+  const optOrderingLink = document.getElementById('opt-ordering-link');
+  const optReservationLink = document.getElementById('opt-reservation-link');
+  const optBookingLink = document.getElementById('opt-booking-link');
+  const optInstagram = document.getElementById('opt-instagram');
+  const optCheckinOut = document.getElementById('opt-checkin-out');
+  const optHouseRules = document.getElementById('opt-house-rules');
+  const tokenSizeWarning = document.getElementById('token-size-warning');
+
+  const STAY_THEMES = {
+    'eco-lodge': 'Eco-lodge / Nature (Organic shapes, earthy tones, Ken Burns zoom)',
+    'urban-sleek': 'Urban Sleek (Grid layout, monochrome, split hero)',
+    'heritage-homestay': 'Heritage / Homestay (Warm serif, textured, story-style)',
+    'beach-resort': 'Beach / Resort (Airy, wave dividers, photo strip)',
+    'luxury': 'Luxury (Dark mode, gold accents, cinematic hero)',
+    'budget-hostel': 'Budget / PG / Hostel (Info-first, practical cards)'
+  };
+
+  const RESTAURANT_THEMES = {
+    'fine-dining': 'Fine Dining / Steakhouse (Dark, warm lighting, cinematic)',
+    'casual-cafe': 'Casual Cafe (Bright, clean typography, playful)',
+    'family-restaurant': 'Family Restaurant (Warm colors, friendly, combos)',
+    'bar-pub': 'Bar / Pub (Dark, neon accents, energetic nightlife)',
+    'traditional-indian': 'Traditional Indian / South Indian (Earthy, motifs)',
+    'bakery-fast-food': 'Bakery / Fast Food (Colorful, quick-order focus)'
+  };
+
+  // Legacy mappings for backwards compatibility with test suites
+  const THEME_NAMES = {
+    ...STAY_THEMES,
+    ...RESTAURANT_THEMES,
+    'fullscreen-overlay': 'Beach / Resort (Full-screen Overlay)',
+    'split-hero': 'Urban Sleek (Split Hero)',
+    'magazine-grid': 'Heritage / Homestay (Magazine Grid)',
+    'minimal-luxury': 'Luxury (Minimal Luxury)',
+    'resort-nature': 'Eco-lodge / Nature',
+    'modern-dark': 'Budget / PG / Hostel (Modern Dark)'
+  };
+
+  function getAutoThemeName(placeId, name, isStay, types) {
+    const typeStr = Array.isArray(types) ? types.join(' ').toLowerCase() : String(types || '').toLowerCase();
+    const nameStr = String(name || '').toLowerCase();
+    const combined = `${nameStr} ${typeStr}`;
+
+    if (isStay) {
+      if (/eco|resort|nature|camp|lodge|treehouse|plantation|farm/i.test(combined)) return { key: 'eco-lodge', name: STAY_THEMES['eco-lodge'] };
+      if (/apartment|urban|city|studio|pod|tech|suites|business/i.test(combined)) return { key: 'urban-sleek', name: STAY_THEMES['urban-sleek'] };
+      if (/heritage|homestay|palace|haveli|manor|estate|colonial|vintage/i.test(combined)) return { key: 'heritage-homestay', name: STAY_THEMES['heritage-homestay'] };
+      if (/beach|coast|ocean|island|sea|bay|cove|haven/i.test(combined)) return { key: 'beach-resort', name: STAY_THEMES['beach-resort'] };
+      if (/luxury|grand|royal|boutique|5_star|marquis|villas/i.test(combined)) return { key: 'luxury', name: STAY_THEMES['luxury'] };
+      if (/hostel|budget|pg|dorm|inn|motel|backpacker|guest_house/i.test(combined)) return { key: 'budget-hostel', name: STAY_THEMES['budget-hostel'] };
+
+      // Hash fallback
+      const keys = Object.keys(STAY_THEMES);
+      let hash = 5381;
+      const str = String(placeId || name || 'stay');
+      for (let i = 0; i < str.length; i++) hash = (((hash << 5) + hash) + str.charCodeAt(i)) & 0x7FFFFFFF;
+      const key = keys[Math.abs(hash) % keys.length];
+      return { key, name: STAY_THEMES[key] };
+    } else {
+      if (/fine_dining|steak|wine|french|italian|gourmet|bistro/i.test(combined)) return { key: 'fine-dining', name: RESTAURANT_THEMES['fine-dining'] };
+      if (/cafe|coffee|tea|bakery|espresso|roaster|breakfast|brunch/i.test(combined)) return { key: 'casual-cafe', name: RESTAURANT_THEMES['casual-cafe'] };
+      if (/family|dhaba|buffet|thali|multi_cuisine|grand/i.test(combined)) return { key: 'family-restaurant', name: RESTAURANT_THEMES['family-restaurant'] };
+      if (/bar|pub|brewery|lounge|club|cocktail|beer|taproom/i.test(combined)) return { key: 'bar-pub', name: RESTAURANT_THEMES['bar-pub'] };
+      if (/indian|south_indian|north_indian|bhatura|tandoori|dosa|biryani/i.test(combined)) return { key: 'traditional-indian', name: RESTAURANT_THEMES['traditional-indian'] };
+      if (/pizza|burger|fast_food|takeaway|bakery|pastry|dessert|chaat/i.test(combined)) return { key: 'bakery-fast-food', name: RESTAURANT_THEMES['bakery-fast-food'] };
+
+      // Hash fallback
+      const keys = Object.keys(RESTAURANT_THEMES);
+      let hash = 5381;
+      const str = String(placeId || name || 'restaurant');
+      for (let i = 0; i < str.length; i++) hash = (((hash << 5) + hash) + str.charCodeAt(i)) & 0x7FFFFFFF;
+      const key = keys[Math.abs(hash) % keys.length];
+      return { key, name: RESTAURANT_THEMES[key] };
     }
-    const idx = Math.abs(hash) % THEME_KEYS.length;
-    return { key: THEME_KEYS[idx], name: THEME_NAMES[THEME_KEYS[idx]] };
   }
 
   // ──────────────────────────────────────────────
@@ -89,10 +165,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let sortDirection = 'asc';
 
   // Modal state
-  let modalPlace = null;       // Row data from table
-  let modalEnriched = null;    // Enriched Google data
-  let userItems = [];          // User-typed menu items / room types
-  let verificationDefs = [];   // Array of { id, label } for checkboxes
+  let modalPlace = null;          // Row data from table
+  let modalEnriched = null;       // Enriched Google data
+  let userItems = [];             // Legacy user items
+  let assignedPhotos = [];        // Assigned photos [{ name, authorAttributions, role, roomIndex }]
+  let roomsState = [];            // [{ name, tariff, size, capacity, bed, amenities, desc, source }]
+  let menuState = [];             // [{ category, name, price, isVeg, desc, source }]
+  let bulkParsedItems = [];       // Temp parsed items from bulk paste
+  let verificationDefs = [];      // Array of { id, label } for checkboxes
 
   // ──────────────────────────────────────────────
   // Event Listeners
@@ -105,9 +185,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   designSelect?.addEventListener('change', () => {
     if (!designAutoInfo) return;
+    const isStay = !!(modalPlace?.type || '').toLowerCase().match(/stay|hotel|motel|hostel|lodge|inn|guest|resort/);
     if (designSelect.value === 'auto') {
       const pId = modalEnriched?.id || modalPlace?.placeId || modalPlace?.id;
-      const autoTheme = getAutoThemeName(pId, modalEnriched?.name || modalPlace?.name);
+      const autoTheme = getAutoThemeName(pId, modalEnriched?.name || modalPlace?.name, isStay, modalEnriched?.types);
       designAutoInfo.textContent = `Auto will apply: ${autoTheme.name}`;
     } else {
       designAutoInfo.textContent = `Manual override: ${THEME_NAMES[designSelect.value] || designSelect.value}`;
@@ -492,23 +573,410 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     `).join('');
 
-    // User items
-    const isStay = (place.type || '').toLowerCase().match(/stay|hotel/);
-    userItemsLabel.textContent = isStay ? 'Room Types & Tariffs (optional)' : 'Menu Items & Prices (optional)';
-    addItemBtn.textContent = isStay ? '+ Add room type' : '+ Add menu item';
-    userItems = [];
-    renderUserItems();
+    // Section 1: Setup Photos Assignment
+    assignedPhotos = [];
+    if (details?.photos && Array.isArray(details.photos) && details.photos.length > 0) {
+      photoAssignmentSection.classList.remove('hidden');
+      assignedPhotos = details.photos.slice(0, 12).map((p, idx) => ({
+        name: p.name,
+        widthPx: p.widthPx,
+        heightPx: p.heightPx,
+        authorAttributions: p.authorAttributions || [],
+        role: idx === 0 ? 'hero' : 'gallery',
+        roomIndex: 0
+      }));
+      renderPhotoAssignment();
+    } else {
+      photoAssignmentSection.classList.add('hidden');
+    }
 
-    // Build verification checkboxes
-    const mapLink = details?.mapLink || place.mapLink || '#';
+    // Section 1: Setup Stays vs Restaurant Editors
+    const isStay = !!(place.type || '').toLowerCase().match(/stay|hotel|motel|hostel|lodge|inn|guest|resort|pg/);
+    roomsState = [];
+    menuState = [];
+    bulkParsedItems = [];
+    if (bulkPasteBox) bulkPasteBox.classList.add('hidden');
+    if (bulkPreviewWrapper) bulkPreviewWrapper.classList.add('hidden');
+
+    const fieldOrderLinkWrap = document.getElementById('field-order-link-wrap');
+    const fieldReserveLinkWrap = document.getElementById('field-reserve-link-wrap');
+    const fieldBookingLinkWrap = document.getElementById('field-booking-link-wrap');
+
+    if (isStay) {
+      roomsEditorSection.classList.remove('hidden');
+      menuEditorSection.classList.add('hidden');
+      if (fieldOrderLinkWrap) fieldOrderLinkWrap.classList.add('hidden');
+      if (fieldReserveLinkWrap) fieldReserveLinkWrap.classList.add('hidden');
+      if (fieldBookingLinkWrap) fieldBookingLinkWrap.classList.remove('hidden');
+      renderRoomsEditor();
+    } else {
+      roomsEditorSection.classList.add('hidden');
+      menuEditorSection.classList.remove('hidden');
+      if (fieldOrderLinkWrap) fieldOrderLinkWrap.classList.remove('hidden');
+      if (fieldReserveLinkWrap) fieldReserveLinkWrap.classList.remove('hidden');
+      if (fieldBookingLinkWrap) fieldBookingLinkWrap.classList.add('hidden');
+      renderMenuEditor();
+    }
+
+    // Reset optional fields
+    if (optOrderingLink) optOrderingLink.value = '';
+    if (optReservationLink) optReservationLink.value = '';
+    if (optBookingLink) optBookingLink.value = '';
+    if (optInstagram) optInstagram.value = '';
+    if (optCheckinOut) optCheckinOut.value = '';
+    if (optHouseRules) optHouseRules.value = '';
+    if (tokenSizeWarning) tokenSizeWarning.classList.add('hidden');
+
+    // Populate Design dropdown based on Stay vs Restaurant
+    if (designSelect) {
+      const themesObj = isStay ? STAY_THEMES : RESTAURANT_THEMES;
+      const themeKeys = Object.keys(themesObj);
+      designSelect.innerHTML = `<option value="auto">Auto (Deterministic from Place ID &amp; Type)</option>` +
+        themeKeys.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(themesObj[k])}</option>`).join('');
+      designSelect.value = 'auto';
+
+      const pId = details?.id || place.placeId || place.id;
+      const autoTheme = getAutoThemeName(pId, details?.name || place.name, isStay, details?.types);
+      if (designAutoInfo) {
+        designAutoInfo.textContent = `Auto will apply: ${autoTheme.name}`;
+      }
+    }
+
+    // Reset WhatsApp & buttons
+    modalGenerateBtn.disabled = true;
+    whatsappInput.value = '';
+    whatsappValidation.textContent = '';
+
+    // Rebuild verification checkboxes
+    updateVerificationCheckboxes();
+  }
+
+  // ──────────────────────────────────────────────
+  // Section 1: Photo Assignment Rendering
+  // ──────────────────────────────────────────────
+  function renderPhotoAssignment() {
+    if (!photosAssignmentGrid) return;
+    const isStay = !!(modalPlace?.type || '').toLowerCase().match(/stay|hotel|motel|hostel|lodge|inn|guest|resort|pg/);
+
+    photosAssignmentGrid.innerHTML = assignedPhotos.map((p, i) => {
+      const isHero = p.role === 'hero';
+      const author = p.authorAttributions && p.authorAttributions[0] ? p.authorAttributions[0].displayName : 'Google Maps';
+      const roleOptions = [
+        { value: 'gallery', label: 'Gallery' },
+        { value: 'hero', label: '★ Hero Banner' },
+        isStay ? { value: 'room', label: 'Room Photo' } : { value: 'food', label: 'Menu / Food' }
+      ];
+
+      return `
+        <div class="photo-assign-card ${isHero ? 'is-hero' : ''}" data-index="${i}">
+          <span class="photo-role-badge">${isHero ? 'HERO' : (p.role.toUpperCase())}</span>
+          <img class="photo-assign-thumb"
+            src="/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=200"
+            alt="Photo ${i + 1} by ${escapeHtml(author)}"
+            loading="lazy">
+          <select class="photo-role-select" data-index="${i}" aria-label="Photo ${i + 1} role">
+            ${roleOptions.map(opt => `<option value="${opt.value}" ${p.role === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
+          </select>
+          ${(isStay && p.role === 'room') ? `
+            <select class="photo-room-select" data-index="${i}" aria-label="Assign to room">
+              ${roomsState.length === 0 ? `<option value="0">Room 1</option>` : roomsState.map((r, rIdx) => `<option value="${rIdx}" ${p.roomIndex === rIdx ? 'selected' : ''}>${escapeHtml(r.name || `Room ${rIdx + 1}`)}</option>`).join('')}
+            </select>
+          ` : ''}
+        </div>
+      `;
+    }).join('');
+
+    photosAssignmentGrid.querySelectorAll('.photo-role-select').forEach(sel => {
+      sel.addEventListener('change', (e) => {
+        const idx = parseInt(e.target.dataset.index, 10);
+        const newRole = e.target.value;
+        if (newRole === 'hero') {
+          // Exactly one hero allowed; unmark any other photo
+          assignedPhotos.forEach((item, i) => {
+            if (i !== idx && item.role === 'hero') item.role = 'gallery';
+          });
+        }
+        assignedPhotos[idx].role = newRole;
+        renderPhotoAssignment();
+        updateVerificationCheckboxes();
+      });
+    });
+
+    photosAssignmentGrid.querySelectorAll('.photo-room-select').forEach(sel => {
+      sel.addEventListener('change', (e) => {
+        const idx = parseInt(e.target.dataset.index, 10);
+        assignedPhotos[idx].roomIndex = parseInt(e.target.value, 10) || 0;
+      });
+    });
+  }
+
+  // ──────────────────────────────────────────────
+  // Section 1: Rooms Editor Rendering (Stays)
+  // ──────────────────────────────────────────────
+  function renderRoomsEditor() {
+    if (!roomsList) return;
+    roomsList.innerHTML = roomsState.map((r, i) => `
+      <div class="room-card" data-index="${i}">
+        <div class="card-top-row">
+          <span class="card-num-badge">Room ${i + 1}</span>
+          <button type="button" class="btn-remove-item btn-remove-room" data-index="${i}" title="Remove Room">×</button>
+        </div>
+        <div class="form-grid-2">
+          <input type="text" class="modal-input room-field" data-field="name" data-index="${i}" placeholder="Room Name (e.g. Deluxe Balcony Suite)" value="${escapeHtml(r.name || '')}">
+          <input type="text" class="modal-input room-field" data-field="tariff" data-index="${i}" placeholder="Tariff / Rate (e.g. ₹4,500/night)" value="${escapeHtml(r.tariff || '')}">
+        </div>
+        <div class="form-grid-3">
+          <input type="text" class="modal-input room-field" data-field="size" data-index="${i}" placeholder="Size (e.g. 350 sq ft)" value="${escapeHtml(r.size || '')}">
+          <input type="text" class="modal-input room-field" data-field="capacity" data-index="${i}" placeholder="Capacity (e.g. 2 Adults, 1 Child)" value="${escapeHtml(r.capacity || '')}">
+          <input type="text" class="modal-input room-field" data-field="bed" data-index="${i}" placeholder="Bed (e.g. 1 King Bed)" value="${escapeHtml(r.bed || '')}">
+        </div>
+        <div class="form-grid-2">
+          <input type="text" class="modal-input room-field" data-field="amenities" data-index="${i}" placeholder="Amenities (e.g. AC, Balcony, WiFi, Mini-fridge)" value="${escapeHtml(r.amenities || '')}">
+          <select class="modal-select room-field" data-field="source" data-index="${i}">
+            <option value="owner confirmed" ${r.source === 'owner confirmed' ? 'selected' : ''}>Source: Owner confirmed</option>
+            <option value="pin photo" ${r.source === 'pin photo' ? 'selected' : ''}>Source: Pin photo</option>
+          </select>
+        </div>
+        <textarea class="modal-input room-field" data-field="desc" data-index="${i}" rows="2" placeholder="Short description of this room type...">${escapeHtml(r.desc || '')}</textarea>
+      </div>
+    `).join('');
+
+    // Bind inputs
+    roomsList.querySelectorAll('.room-field').forEach(el => {
+      const handler = (e) => {
+        const idx = parseInt(e.target.dataset.index, 10);
+        const field = e.target.dataset.field;
+        if (!isNaN(idx) && field && roomsState[idx]) {
+          roomsState[idx][field] = e.target.value;
+          updateVerificationCheckboxes();
+        }
+      };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
+    });
+
+    roomsList.querySelectorAll('.btn-remove-room').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.index, 10);
+        roomsState.splice(idx, 1);
+        renderRoomsEditor();
+        updateVerificationCheckboxes();
+      });
+    });
+  }
+
+  // ──────────────────────────────────────────────
+  // Section 1: Menu Editor & Bulk Paste (Restaurants)
+  // ──────────────────────────────────────────────
+  function renderMenuEditor() {
+    if (!menuItemsList) return;
+    menuItemsList.innerHTML = menuState.map((m, i) => `
+      <div class="menu-card" data-index="${i}">
+        <div class="card-top-row">
+          <span class="card-num-badge">Item ${i + 1}</span>
+          <button type="button" class="btn-remove-item btn-remove-menu" data-index="${i}" title="Remove Item">×</button>
+        </div>
+        <div class="form-grid-3">
+          <input type="text" class="modal-input menu-field" data-field="category" data-index="${i}" placeholder="Category (e.g. Starters)" value="${escapeHtml(m.category || '')}">
+          <input type="text" class="modal-input menu-field" data-field="name" data-index="${i}" placeholder="Item Name (e.g. Paneer Tikka)" value="${escapeHtml(m.name || '')}">
+          <input type="text" class="modal-input menu-field" data-field="price" data-index="${i}" placeholder="Price (e.g. ₹260)" value="${escapeHtml(m.price || '')}">
+        </div>
+        <div class="form-grid-3">
+          <select class="modal-select menu-field" data-field="isVeg" data-index="${i}">
+            <option value="veg" ${m.isVeg === true || m.isVeg === 'veg' ? 'selected' : ''}>🟢 Veg</option>
+            <option value="non-veg" ${m.isVeg === false || m.isVeg === 'non-veg' ? 'selected' : ''}>🔴 Non-Veg</option>
+            <option value="egg" ${m.isVeg === 'egg' ? 'selected' : ''}>🟡 Contains Egg</option>
+          </select>
+          <input type="text" class="modal-input menu-field" data-field="desc" data-index="${i}" placeholder="Description (optional)" value="${escapeHtml(m.desc || '')}">
+          <select class="modal-select menu-field" data-field="source" data-index="${i}">
+            <option value="owner confirmed" ${m.source === 'owner confirmed' ? 'selected' : ''}>Source: Owner confirmed</option>
+            <option value="pin photo" ${m.source === 'pin photo' ? 'selected' : ''}>Source: Pin photo</option>
+          </select>
+        </div>
+      </div>
+    `).join('');
+
+    // Bind inputs
+    menuItemsList.querySelectorAll('.menu-field').forEach(el => {
+      const handler = (e) => {
+        const idx = parseInt(e.target.dataset.index, 10);
+        const field = e.target.dataset.field;
+        if (!isNaN(idx) && field && menuState[idx]) {
+          menuState[idx][field] = e.target.value;
+          updateVerificationCheckboxes();
+        }
+      };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
+    });
+
+    menuItemsList.querySelectorAll('.btn-remove-menu').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.index, 10);
+        menuState.splice(idx, 1);
+        renderMenuEditor();
+        updateVerificationCheckboxes();
+      });
+    });
+  }
+
+  // Bulk Paste Handlers
+  toggleBulkPasteBtn?.addEventListener('click', () => {
+    if (bulkPasteBox) bulkPasteBox.classList.toggle('hidden');
+  });
+
+  parseBulkBtn?.addEventListener('click', () => {
+    if (!bulkMenuText) return;
+    const raw = bulkMenuText.value || '';
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    bulkParsedItems = [];
+
+    lines.forEach(line => {
+      const parts = line.split('|').map(p => p.trim());
+      if (parts.length >= 2) {
+        const category = parts[0] || 'General';
+        const name = parts[1] || '';
+        const price = parts[2] || '';
+        const vegRaw = (parts[3] || '').toLowerCase();
+        let isVeg = 'veg';
+        if (vegRaw.includes('non')) isVeg = 'non-veg';
+        else if (vegRaw.includes('egg')) isVeg = 'egg';
+        else if (vegRaw.includes('veg')) isVeg = 'veg';
+
+        const desc = parts[4] || '';
+        if (name) {
+          bulkParsedItems.push({ category, name, price, isVeg, desc, source: 'owner confirmed' });
+        }
+      }
+    });
+
+    if (bulkParseStatus) {
+      bulkParseStatus.textContent = `Parsed ${bulkParsedItems.length} items.`;
+    }
+
+    if (bulkParsedItems.length > 0 && bulkPreviewWrapper && bulkPreviewTableContainer) {
+      bulkPreviewWrapper.classList.remove('hidden');
+      bulkPreviewTableContainer.innerHTML = `
+        <table class="bulk-table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Item</th>
+              <th>Price</th>
+              <th>Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${bulkParsedItems.map((item, idx) => `
+              <tr>
+                <td><input type="text" class="modal-input bulk-prev-field" data-field="category" data-index="${idx}" value="${escapeHtml(item.category)}"></td>
+                <td><input type="text" class="modal-input bulk-prev-field" data-field="name" data-index="${idx}" value="${escapeHtml(item.name)}"></td>
+                <td><input type="text" class="modal-input bulk-prev-field" data-field="price" data-index="${idx}" value="${escapeHtml(item.price)}"></td>
+                <td>
+                  <select class="modal-select bulk-prev-field" data-field="isVeg" data-index="${idx}">
+                    <option value="veg" ${item.isVeg === 'veg' ? 'selected' : ''}>Veg</option>
+                    <option value="non-veg" ${item.isVeg === 'non-veg' ? 'selected' : ''}>Non-Veg</option>
+                    <option value="egg" ${item.isVeg === 'egg' ? 'selected' : ''}>Egg</option>
+                  </select>
+                </td>
+                <td><input type="text" class="modal-input bulk-prev-field" data-field="desc" data-index="${idx}" value="${escapeHtml(item.desc)}"></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+
+      bulkPreviewTableContainer.querySelectorAll('.bulk-prev-field').forEach(el => {
+        el.addEventListener('input', (e) => {
+          const idx = parseInt(e.target.dataset.index, 10);
+          const field = e.target.dataset.field;
+          if (!isNaN(idx) && bulkParsedItems[idx]) {
+            bulkParsedItems[idx][field] = e.target.value;
+          }
+        });
+      });
+    }
+  });
+
+  acceptBulkBtn?.addEventListener('click', () => {
+    if (bulkParsedItems.length > 0) {
+      menuState = menuState.concat(bulkParsedItems);
+      bulkParsedItems = [];
+      if (bulkPreviewWrapper) bulkPreviewWrapper.classList.add('hidden');
+      if (bulkPasteBox) bulkPasteBox.classList.add('hidden');
+      if (bulkMenuText) bulkMenuText.value = '';
+      if (bulkParseStatus) bulkParseStatus.textContent = '';
+      renderMenuEditor();
+      updateVerificationCheckboxes();
+    }
+  });
+
+  addRoomBtn?.addEventListener('click', () => {
+    roomsState.push({
+      name: '',
+      tariff: '',
+      size: '',
+      capacity: '',
+      bed: '',
+      amenities: '',
+      desc: '',
+      source: 'owner confirmed'
+    });
+    renderRoomsEditor();
+    updateVerificationCheckboxes();
+  });
+
+  addMenuItemBtn?.addEventListener('click', () => {
+    menuState.push({
+      category: 'General',
+      name: '',
+      price: '',
+      isVeg: 'veg',
+      desc: '',
+      source: 'owner confirmed'
+    });
+    renderMenuEditor();
+    updateVerificationCheckboxes();
+  });
+
+  // ──────────────────────────────────────────────
+  // Verification Checkboxes Generator
+  // ──────────────────────────────────────────────
+  function updateVerificationCheckboxes() {
+    const place = modalPlace;
+    const details = modalEnriched;
+    const mapLink = details?.mapLink || place?.mapLink || '#';
+
     verificationDefs = [
       { id: 'v-pin', label: `I confirmed this is the correct business on <a href="${escapeHtml(mapLink)}" target="_blank" rel="noopener noreferrer">Google Maps ↗</a>` },
       { id: 'v-name', label: 'Verified: Business Name' },
       { id: 'v-address', label: 'Verified: Address' },
       { id: 'v-phone', label: 'Verified: Phone number' },
     ];
-    if (details?.openingHours || place.openingHours !== 'Not available') {
+
+    if (details?.openingHours || place?.openingHours !== 'Not available') {
       verificationDefs.push({ id: 'v-hours', label: 'Verified: Opening Hours' });
+    }
+
+    if (assignedPhotos.length > 0) {
+      verificationDefs.push({ id: 'v-photos', label: 'Verified: Photo assignments (Source: pin photo)' });
+    }
+
+    const isStay = !!(place?.type || '').toLowerCase().match(/stay|hotel|motel|hostel|lodge|inn|guest|resort|pg/);
+    if (isStay && roomsState.length > 0) {
+      const anyOwner = roomsState.some(r => r.source === 'owner confirmed');
+      verificationDefs.push({ id: 'v-rooms', label: `Verified: Room types & rates (Source: ${anyOwner ? 'owner confirmed' : 'pin photo'})` });
+    }
+
+    if (!isStay && menuState.length > 0) {
+      const anyOwner = menuState.some(m => m.source === 'owner confirmed');
+      verificationDefs.push({ id: 'v-menu', label: `Verified: Menu items & prices (Source: ${anyOwner ? 'owner confirmed' : 'pin photo'})` });
+    }
+
+    const hasOptional = !!(optOrderingLink?.value?.trim() || optReservationLink?.value?.trim() || optBookingLink?.value?.trim() || optInstagram?.value?.trim() || optCheckinOut?.value?.trim() || optHouseRules?.value?.trim());
+    if (hasOptional) {
+      verificationDefs.push({ id: 'v-optional', label: 'Verified: Additional links & policies (Source: owner confirmed)' });
     }
 
     verificationChecks.innerHTML = verificationDefs.map(v => `
@@ -518,56 +986,17 @@ document.addEventListener('DOMContentLoaded', () => {
       </label>
     `).join('');
 
-    // Reset button state & design dropdown
-    modalGenerateBtn.disabled = true;
-    whatsappInput.value = '';
-    whatsappValidation.textContent = '';
-    if (designSelect) {
-      designSelect.value = 'auto';
-      const pId = details?.id || place.placeId || place.id;
-      const autoTheme = getAutoThemeName(pId, details?.name || place.name);
-      if (designAutoInfo) {
-        designAutoInfo.textContent = `Auto will apply: ${autoTheme.name}`;
-      }
-    }
-  }
-
-  function renderUserItems() {
-    const isStay = (modalPlace?.type || '').toLowerCase().match(/stay|hotel/);
-    userItemsList.innerHTML = userItems.map((item, i) => `
-      <div class="user-item-row" data-index="${i}">
-        <input type="text" class="modal-input item-name" placeholder="${isStay ? 'Room type' : 'Item name'}" value="${escapeHtml(item.name)}" data-field="name" data-index="${i}">
-        <input type="text" class="modal-input item-price" placeholder="${isStay ? 'Tariff (e.g. ₹1200/night)' : 'Price (e.g. ₹250)'}" value="${escapeHtml(item.price)}" data-field="price" data-index="${i}">
-        <select class="modal-select item-source" data-field="source" data-index="${i}">
-          <option value="pin photo" ${item.source === 'pin photo' ? 'selected' : ''}>Pin photo</option>
-          <option value="owner confirmed" ${item.source === 'owner confirmed' ? 'selected' : ''}>Owner confirmed</option>
-        </select>
-        <button type="button" class="btn-remove-item" data-index="${i}" title="Remove">×</button>
-      </div>
-    `).join('');
-
-    // Bind item input events
-    userItemsList.querySelectorAll('[data-index]').forEach(el => {
-      el.addEventListener('input', (e) => {
-        const idx = parseInt(e.target.dataset.index, 10);
-        const field = e.target.dataset.field;
-        if (field && !isNaN(idx)) userItems[idx][field] = e.target.value;
-      });
-      el.addEventListener('change', (e) => {
-        const idx = parseInt(e.target.dataset.index, 10);
-        const field = e.target.dataset.field;
-        if (field && !isNaN(idx)) userItems[idx][field] = e.target.value;
-      });
+    verificationChecks.querySelectorAll('.verification-checkbox').forEach(cb => {
+      cb.addEventListener('change', updateGenerateButtonState);
     });
 
-    userItemsList.querySelectorAll('.btn-remove-item').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const idx = parseInt(btn.dataset.index, 10);
-        userItems.splice(idx, 1);
-        renderUserItems();
-      });
-    });
+    updateGenerateButtonState();
   }
+
+  // Bind inputs in optional fields to update verification
+  [optOrderingLink, optReservationLink, optBookingLink, optInstagram, optCheckinOut, optHouseRules].forEach(input => {
+    input?.addEventListener('input', updateVerificationCheckboxes);
+  });
 
   function validateWhatsApp() {
     const val = whatsappInput.value.trim().replace(/\D/g, '');
@@ -599,6 +1028,10 @@ document.addEventListener('DOMContentLoaded', () => {
     modalPlace = null;
     modalEnriched = null;
     userItems = [];
+    assignedPhotos = [];
+    roomsState = [];
+    menuState = [];
+    bulkParsedItems = [];
   }
 
   // ──────────────────────────────────────────────
@@ -629,8 +1062,17 @@ document.addEventListener('DOMContentLoaded', () => {
         enriched: details || null,
         placeId: details?.id || place.placeId || place.id || null,
         design: designSelect ? designSelect.value : 'auto',
-        menuItems: userItems.filter(i => i.name),
-        roomTypes: userItems.filter(i => i.name)
+        assignedPhotos: assignedPhotos,
+        roomTypes: roomsState.filter(r => r.name),
+        menuItems: menuState.filter(m => m.name),
+        optionalFields: {
+          orderingLink: optOrderingLink?.value?.trim() || null,
+          reservationLink: optReservationLink?.value?.trim() || null,
+          bookingLink: optBookingLink?.value?.trim() || null,
+          instagram: optInstagram?.value?.trim() || null,
+          checkInOut: optCheckinOut?.value?.trim() || null,
+          houseRules: optHouseRules?.value?.trim() || null
+        }
       };
 
       const response = await fetch('/api/generate-site', {
@@ -640,7 +1082,15 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Generation failed.');
+      if (!response.ok) {
+        if (response.status === 400 && data.error && data.error.includes('too large')) {
+          if (tokenSizeWarning) {
+            tokenSizeWarning.textContent = `⚠️ ${data.error}`;
+            tokenSizeWarning.classList.remove('hidden');
+          }
+        }
+        throw new Error(data.error || 'Generation failed.');
+      }
 
       closeModal();
 
@@ -659,7 +1109,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     } catch (err) {
       console.error('[Generate Error]', err);
-      modalErrorMsg.textContent = err.message;
+      modalErrorMsg.textContent = err.message || 'Failed to generate website preview.';
       modalError.classList.remove('hidden');
       modalGenerateBtn.disabled = false;
       modalGenerateBtn.querySelector('span').textContent = 'Generate Website';

@@ -1128,3 +1128,269 @@ body {
   margin-top: 0.25rem;
   flex-shrink: 0;
 }
+
+/* ────────────────────────────────────────────
+   Section 1: Extra Data Entry Styles
+──────────────────────────────────────────── */
+.modal-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.source-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #93C5FD;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* Photo Assignment Grid */
+.photos-assignment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 0.75rem;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+
+.photo-assign-card {
+  background: rgba(31, 41, 55, 0.6);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  position: relative;
+  transition: border-color 0.2s ease;
+}
+
+.photo-assign-card.is-hero {
+  border-color: #38BDF8;
+  background: rgba(14, 165, 233, 0.1);
+}
+
+.photo-assign-thumb {
+  width: 100%;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #111827;
+}
+
+.photo-role-select,
+.photo-room-select {
+  width: 100%;
+  font-size: 0.72rem;
+  padding: 0.25rem 0.4rem;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.photo-role-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.photo-assign-card.is-hero .photo-role-badge {
+  background: #0284C7;
+}
+
+/* Rooms Editor */
+.rooms-list, .menu-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.room-card, .menu-card {
+  background: rgba(31, 41, 55, 0.5);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.card-num-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+@media (max-width: 600px) {
+  .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }
+}
+
+/* Bulk Paste Box */
+.bulk-paste-container {
+  background: rgba(17, 24, 39, 0.6);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.bulk-paste-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-bulk-toggle {
+  background: transparent;
+  border: 1px solid var(--border-color-light);
+  color: #A78BFA;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-bulk-toggle:hover {
+  background: rgba(167, 139, 250, 0.12);
+  border-color: #A78BFA;
+}
+
+.bulk-format-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.bulk-textarea {
+  font-family: monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.bulk-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.bulk-status {
+  font-size: 0.78rem;
+  color: #34D399;
+}
+
+.bulk-preview-wrapper {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.bulk-preview-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #E2E8F0;
+}
+
+.bulk-preview-table-container {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.bulk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.bulk-table th, .bulk-table td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.bulk-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* Optional fields grid */
+.optional-fields-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.optional-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.optional-field-full {
+  grid-column: 1 / -1;
+}
+
+.optional-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.btn-sm {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.btn-success {
+  background: #16A34A;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.btn-success:hover { background: #15803D; }

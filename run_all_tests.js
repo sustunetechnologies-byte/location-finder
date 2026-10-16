@@ -36,6 +36,9 @@ async function main() {
     console.log('\n=== Running test_redesign.js ===');
     execSync('node test_redesign.js', { stdio: 'inherit' });
 
+    console.log('\n=== Running test_all_features.js ===');
+    execSync('node test_all_features.js', { stdio: 'inherit' });
+
     console.log('\n ALL TESTS SUCCEEDED!');
   } finally {
     serverProc.kill();
