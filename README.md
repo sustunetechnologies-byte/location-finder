@@ -48,9 +48,9 @@ Every preview undergoes intern verification in the review modal before generatio
 
 ### 3. Preview Link Compression & URL Size Enforcement
 - URL tokens carry all business and entered data directly in the URL using **zlib deflate** compression and **base64url** encoding.
-- Hard limit of **7500 characters** enforced on token length.
+- Hard limit of **12000 characters** enforced on token length (with payload review & room description optimization).
 - If entered data exceeds the limit, the server rejects generation with HTTP 400 and the review modal displays a clear warning prompting the intern to reduce photos, trim descriptions, or reduce menu items.
-- Tested and verified with 40 menu items and 6 detailed rooms.
+- Tested and verified with 40 menu items and 6 detailed rooms (< 1500 chars).
 
 ---
 
@@ -126,7 +126,7 @@ node run_all_tests.js
 ```
 
 Included test suites:
-- `test_all_features.js`: Comprehensive suite testing 4 stays, 4 restaurants, determinism, all 12 theme overrides, 40-item menu and 6-room compression within 7500 chars, 7500 char rejection, interactive menu filtering, booking forms, room drawer deep-linking, lightbox, FAQ accordion, landline vs mobile rules, and disclaimers.
+- `test_all_features.js`: Comprehensive suite testing 4 stays, 4 restaurants, determinism, all 12 theme overrides, 40-item menu and 6-room compression within token limit, 12000 char rejection, interactive menu filtering, booking forms, room drawer deep-linking, lightbox, FAQ accordion, landline vs mobile rules, and disclaimers.
 - `test_redesign.js`: Redesign suite testing layout themes, Ken Burns hero, SVG gradient fallback, lightbox gestures, live hours table, and mobile floating action bar.
 - `test_features.js`: Automated testing for search endpoint, website health status checks, Excel export, and robots headers.
 - `test_run.js`: Deep verification of phone normalization, landline vs WhatsApp logic, and templates.

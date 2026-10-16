@@ -356,18 +356,35 @@ async function runComprehensiveTests() {
     });
 
     // ──────────────────────────────────────────────
-    // Test 7: Enforce 7500 limit rejection with 400
+    // Test 7: Enforce 12000 limit rejection with 400
     // ──────────────────────────────────────────────
-    await test('Server rejects payloads exceeding 7500 chars with HTTP 400 and clear error message', async () => {
-      // Create 60 items with high-entropy unique descriptions so compressed token exceeds 7500 chars
+    await test('Server rejects payloads exceeding 12000 chars with HTTP 400 and clear error message', async () => {
+      // Create high-entropy unique entries so compressed token exceeds 12000 chars
       const crypto = require('crypto');
       const overflowMenu = [];
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < 50; i++) {
         overflowMenu.push({
           category: 'Category ' + i,
           name: 'Item ' + i,
           price: '₹' + (100 + i),
-          description: crypto.randomBytes(150).toString('hex') // 300 hex chars of uncompressible data
+          description: crypto.randomBytes(120).toString('hex')
+        });
+      }
+      const overflowRooms = [];
+      for (let i = 0; i < 12; i++) {
+        overflowRooms.push({
+          name: 'Room ' + i,
+          tariff: '₹' + (5000 + i),
+          description: crypto.randomBytes(160).toString('hex'),
+          amenities: crypto.randomBytes(110).toString('hex')
+        });
+      }
+      const overflowReviews = [];
+      for (let i = 0; i < 5; i++) {
+        overflowReviews.push({
+          authorName: 'Reviewer ' + i,
+          rating: 5,
+          text: crypto.randomBytes(150).toString('hex')
         });
       }
 
@@ -376,8 +393,12 @@ async function runComprehensiveTests() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: 'Gigantic Overflow Test',
-          type: 'Restaurant',
-          menu: overflowMenu
+          type: 'Stay',
+          menu: overflowMenu,
+          rooms: overflowRooms,
+          enriched: {
+            reviews: overflowReviews
+          }
         })
       });
 

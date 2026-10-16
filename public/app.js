@@ -1062,9 +1062,12 @@ document.addEventListener('DOMContentLoaded', () => {
         enriched: details || null,
         placeId: details?.id || place.placeId || place.id || null,
         design: designSelect ? designSelect.value : 'auto',
-        assignedPhotos: assignedPhotos,
-        roomTypes: roomsState.filter(r => r.name),
-        menuItems: menuState.filter(m => m.name),
+        photoAssignments: assignedPhotos.reduce((acc, p, idx) => {
+          acc[idx] = { role: p.role, roomIndex: p.roomIndex };
+          return acc;
+        }, {}),
+        rooms: roomsState.filter(r => r.name),
+        menu: menuState.filter(m => m.name),
         optionalFields: {
           orderingLink: optOrderingLink?.value?.trim() || null,
           reservationLink: optReservationLink?.value?.trim() || null,
@@ -1083,7 +1086,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const data = await response.json();
       if (!response.ok) {
-        if (response.status === 400 && data.error && data.error.includes('too large')) {
+        if (response.status === 400 && data.error && (data.error.includes('too large') || data.error.includes('limit exceeded') || data.error.includes('size limit'))) {
           if (tokenSizeWarning) {
             tokenSizeWarning.textContent = `⚠️ ${data.error}`;
             tokenSizeWarning.classList.remove('hidden');

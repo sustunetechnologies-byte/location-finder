@@ -748,19 +748,49 @@ app.post('/api/generate-site', (req, res) => {
       rating: enriched?.rating || null,
       reviewCount: enriched?.reviewCount || null,
       priceLevel: enriched?.priceLevel || null,
-      editorialSummary: enriched?.editorialSummary || null,
+      editorialSummary: enriched?.editorialSummary ? String(enriched.editorialSummary).slice(0, 400) : null,
       features: enriched?.features || {},
-      photos: Array.isArray(enriched?.photos) ? enriched.photos.slice(0, 12) : [],
-      reviews: Array.isArray(enriched?.reviews) ? enriched.reviews.slice(0, 10) : [],
+      photos: Array.isArray(enriched?.photos) ? enriched.photos.slice(0, 10).map(p => ({
+        name: p.name,
+        widthPx: p.widthPx,
+        heightPx: p.heightPx,
+        authorAttributions: (p.authorAttributions || []).map(a => ({
+          displayName: (a.displayName || 'Google Maps Contributor').slice(0, 60),
+          uri: (a.uri || '').slice(0, 150)
+        }))
+      })) : [],
+      reviews: Array.isArray(enriched?.reviews) ? enriched.reviews.slice(0, 5).map(r => ({
+        authorName: (r.authorName || 'Guest').slice(0, 60),
+        rating: r.rating || null,
+        text: (r.text || '').slice(0, 280)
+      })) : [],
       photosUnavailable: enriched?.photosUnavailable || false,
       // User-typed and extra items
-      rooms: Array.isArray(rooms) && rooms.length > 0 ? rooms.slice(0, 12) : (Array.isArray(roomTypes) ? roomTypes.slice(0, 12) : []),
-      menu: Array.isArray(menu) && menu.length > 0 ? menu.slice(0, 60) : (Array.isArray(menuItems) ? menuItems.slice(0, 60) : []),
-      photoAssignments: photoAssignments && typeof photoAssignments === 'object' ? photoAssignments : {},
+      rooms: (Array.isArray(rooms) && rooms.length > 0 ? rooms : (Array.isArray(roomTypes) ? roomTypes : [])).slice(0, 12).map(r => ({
+        name: (r.name || '').slice(0, 100),
+        tariff: (r.tariff || '').slice(0, 50),
+        size: (r.size || '').slice(0, 50),
+        capacity: (r.capacity || '').slice(0, 50),
+        bedType: (r.bedType || r.bed || '').slice(0, 50),
+        amenities: (r.amenities || '').slice(0, 200),
+        description: (r.description || r.desc || '').slice(0, 300),
+        source: r.source || 'owner confirmed',
+        photoIndex: typeof r.photoIndex === 'number' ? r.photoIndex : undefined
+      })),
+      menu: (Array.isArray(menu) && menu.length > 0 ? menu : (Array.isArray(menuItems) ? menuItems : [])).slice(0, 50).map(m => ({
+        category: (m.category || 'General').slice(0, 50),
+        name: (m.name || m.item || '').slice(0, 100),
+        price: (m.price || '').slice(0, 30),
+        vegNonVeg: (m.vegNonVeg || m.isVeg || '').slice(0, 20),
+        description: (m.description || m.desc || '').slice(0, 200),
+        source: m.source || 'owner confirmed'
+      })),
+      photoAssignments: (photoAssignments && typeof photoAssignments === 'object' && !Array.isArray(photoAssignments))
+        ? photoAssignments
+        : (Array.isArray(req.body.assignedPhotos)
+          ? req.body.assignedPhotos.reduce((acc, p, idx) => { acc[idx] = { role: p.role || 'gallery', roomIndex: p.roomIndex || 0 }; return acc; }, {})
+          : {}),
       optionalFields: optionalFields && typeof optionalFields === 'object' ? optionalFields : {},
-      // Backwards compat
-      menuItems: Array.isArray(menu) && menu.length > 0 ? menu.slice(0, 60) : (Array.isArray(menuItems) ? menuItems.slice(0, 60) : []),
-      roomTypes: Array.isArray(rooms) && rooms.length > 0 ? rooms.slice(0, 12) : (Array.isArray(roomTypes) ? roomTypes.slice(0, 12) : []),
       generatedDate: new Date().toISOString().split('T')[0]
     };
 
@@ -771,10 +801,10 @@ app.post('/api/generate-site', (req, res) => {
     const compressed = zlib.deflateSync(Buffer.from(JSON.stringify(payload), 'utf8')).toString('base64url');
     const token = codePrefix + compressed;
 
-    // Enforce URL link length limit (7500 chars)
-    if (token.length > 7500) {
+    // Enforce URL link length limit (12000 chars)
+    if (token.length > 12000) {
       return res.status(400).json({
-        error: 'Preview link size limit exceeded (' + token.length + ' chars > 7500). Please reduce photos, room descriptions, or menu items.'
+        error: 'Preview link size limit exceeded (' + token.length + ' chars > 12000). Please reduce photos, room descriptions, or menu items.'
       });
     }
 
@@ -917,7 +947,7 @@ app.get('/preview/:token', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
 
   const { token } = req.params;
-  if (!token || typeof token !== 'string' || !/^[A-Za-z0-9_\\-]{16,8000}$/.test(token)) {
+  if (!token || typeof token !== 'string' || !/^[A-Za-z0-9_\-]{16,16000}$/.test(token)) {
     return res.status(400).send(renderErrorPage('Invalid preview token.'));
   }
 
