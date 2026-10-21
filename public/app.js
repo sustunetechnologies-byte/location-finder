@@ -37,6 +37,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchProgressFill = document.getElementById('search-progress-fill');
   const searchProgressText = document.getElementById('search-progress-text');
   const requestsUsedLine = document.getElementById('requests-used-line');
+  // Section 4: Search Amber Warnings
+  const searchAmberBanners = document.getElementById('search-amber-banners');
+  const searchCappedBanner = document.getElementById('search-capped-banner');
+  const searchErrorsBanner = document.getElementById('search-errors-banner');
   // Section 4: Pagination Controls
   const paginationWrapper = document.getElementById('pagination-wrapper');
   const paginationSummary = document.getElementById('pagination-summary');
@@ -191,6 +195,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentSearchQuery = '';
   let currentCategory = 'both';
   let currentSource = 'google';
+  let lastSearchTotalRequests = null;
   let filterMode = 'all';
   let sortColumn = 'name';
   let sortDirection = 'asc';
@@ -492,11 +497,16 @@ document.addEventListener('DOMContentLoaded', () => {
     sourceBadge.classList.remove('hidden');
     cacheBadge.classList.add('hidden');
 
+    if (searchAmberBanners) searchAmberBanners.classList.add('hidden');
+    if (searchCappedBanner) searchCappedBanner.classList.add('hidden');
+    if (searchErrorsBanner) searchErrorsBanner.classList.add('hidden');
+
     let cursor = null;
     let totalRequestsUsed = 0;
     let isComplete = false;
     let stepCount = 0;
     let isCapped = false;
+    let stepErrors = [];
 
     while (!isComplete) {
       const resp = await fetch('/api/search/step', {
@@ -519,7 +529,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       totalRequestsUsed = data.totalRequestsUsed || 0;
-      isCapped = !!data.capped;
+      lastSearchTotalRequests = totalRequestsUsed;
+      if (data.capped) isCapped = true;
+      if (data.errors && data.errors.length > 0) {
+        stepErrors.push(...data.errors);
+      }
 
       if (data.places && data.places.length > 0) {
         rawPlaces.push(...data.places);
@@ -535,16 +549,26 @@ document.addEventListener('DOMContentLoaded', () => {
       if (searchProgressFill) searchProgressFill.style.width = pct + '%';
       if (searchProgressText) {
         if (isComplete) {
-          searchProgressText.textContent = (isCapped ? 'Search stopped at the request limit, results may be incomplete. ' : 'Complete! ') + rawPlaces.length + ' places found';
+          searchProgressText.textContent = rawPlaces.length + ' places found, ' + totalRequestsUsed + ' Google requests used';
         } else {
           searchProgressText.textContent = 'Searching... ' + rawPlaces.length + ' places found';
         }
       }
     }
 
-    // Small line after each search ("Used 118 Google requests")
+    // Show amber message when capped or errors exist (Section 4)
+    if (isCapped && searchCappedBanner) {
+      searchCappedBanner.classList.remove('hidden');
+      if (searchAmberBanners) searchAmberBanners.classList.remove('hidden');
+    }
+    if (stepErrors.length > 0 && searchErrorsBanner) {
+      searchErrorsBanner.classList.remove('hidden');
+      if (searchAmberBanners) searchAmberBanners.classList.remove('hidden');
+    }
+
+    // Final summary: "N places found, N Google requests used"
     if (requestsUsedLine) {
-      requestsUsedLine.textContent = 'Used ' + totalRequestsUsed + ' Google requests';
+      requestsUsedLine.textContent = rawPlaces.length + ' places found, ' + totalRequestsUsed + ' Google requests used';
       requestsUsedLine.classList.remove('hidden');
     }
 
@@ -679,78 +703,51 @@ document.addEventListener('DOMContentLoaded', () => {
       '</div>';
   }
 
-  // ── Section 2: Phone Formatting Helper ──
+  // ── Section 2 & 7: Phone Formatting Helper ──
   function formatIndianPhone(raw) {
     if (!raw || typeof raw !== 'string' || raw === 'Not available') {
-      return { display: 'Not available', tel: null, isValid: false };
+      return { display: 'Not available', tel: null, isValid: false, isMobile: false };
     }
-    const s = raw.trim().replace(/[\s\-]/g, '');
-    let digits = s.replace(/\D/g, '');
-    if (!digits) return { display: raw, tel: null, isValid: false };
+    const trimmed = raw.trim();
+    if (!trimmed) return { display: 'Not available', tel: null, isValid: false, isMobile: false };
 
-    if ((digits.length === 12 || digits.length === 11) && digits.startsWith('91')) {
-      digits = digits.slice(2);
-    }
-    if (digits.length === 11 && digits.startsWith('0')) {
-      digits = digits.slice(1);
-    } else if (digits.length > 10 && digits.startsWith('0')) {
-      digits = digits.slice(1);
-    }
+    const clean = trimmed.replace(/\+91[\s\-]*/, '').replace(/^91[\s\-]+/, '');
 
-    if (digits.length === 10) {
-      // 2-digit STD codes: 80, 11, 22, 33, 44, 20, 40, 79
-      if (/^(80|11|22|33|44|20|40|79)/.test(digits)) {
-        const std = digits.slice(0, 2);
-        const part1 = digits.slice(2, 6);
-        const part2 = digits.slice(6, 10);
-        return {
-          display: '+91 ' + std + ' ' + part1 + ' ' + part2,
-          tel: 'tel:+91' + digits,
-          digits,
-          isValid: true
-        };
-      }
-      // 3-digit STD codes: e.g. 821 for Mysuru, 824 for Mangaluru, etc.
-      if (/^(821|824|836|816|820|831|832|847|825|838|839|848|818|819|817|827|822|823)/.test(digits)) {
-        const std = digits.slice(0, 3);
-        const part1 = digits.slice(3, 6);
-        const part2 = digits.slice(6, 10);
-        return {
-          display: '+91 ' + std + ' ' + part1 + ' ' + part2,
-          tel: 'tel:+91' + digits,
-          digits,
-          isValid: true
-        };
-      }
-      // Mobile number: +91 XXXXX XXXXX
-      return {
-        display: '+91 ' + digits.slice(0, 5) + ' ' + digits.slice(5, 10),
-        tel: 'tel:+91' + digits,
-        digits,
-        isValid: true
-      };
+    // 1. Indian mobile: 5 digits, space/dash, 5 digits starting with 6-9
+    const mobileMatch = clean.match(/^0?([6-9]\d{4})[\s\-]+(\d{5})$/);
+    if (mobileMatch) {
+      const display = '+91 ' + mobileMatch[1] + ' ' + mobileMatch[2];
+      const digits = mobileMatch[1] + mobileMatch[2];
+      return { display, tel: 'tel:+91' + digits, digits, isValid: true, isMobile: true };
     }
 
-    // 8-digit landline without STD code (e.g. 23456789)
-    if (digits.length === 8) {
-      return {
-        display: '+91 80 ' + digits.slice(0, 4) + ' ' + digits.slice(4, 8),
-        tel: 'tel:+9180' + digits,
-        digits: '80' + digits,
-        isValid: true
-      };
+    // 1b. Contiguous 10 digits starting with 6-9
+    const plainMobileMatch = clean.replace(/[\s\-]/g, '').match(/^0?([6-9]\d{9})$/);
+    if (plainMobileMatch) {
+      const d = plainMobileMatch[1];
+      const display = '+91 ' + d.slice(0, 5) + ' ' + d.slice(5, 10);
+      return { display, tel: 'tel:+91' + d, digits: d, isValid: true, isMobile: true };
     }
 
-    if (digits.length >= 7) {
-      return {
-        display: '+91 ' + digits,
-        tel: 'tel:+91' + digits,
-        digits,
-        isValid: true
-      };
+    // 2. Landlines: preserve Google's own grouping, strip leading 0
+    const landlineGroupMatch = clean.match(/^0?(\d{2,4})[\s\-]+(.*)$/);
+    if (landlineGroupMatch && /\d/.test(landlineGroupMatch[2])) {
+      const std = landlineGroupMatch[1];
+      const rest = landlineGroupMatch[2];
+      const display = '+91 ' + std + ' ' + rest;
+      const digits = std + rest.replace(/\D/g, '');
+      return { display, tel: 'tel:+91' + digits, digits, isValid: true, isMobile: false };
     }
 
-    return { display: raw, tel: 'tel:' + raw.replace(/\s+/g, ''), isValid: false };
+    // 3. Known plain digit sequences >= 7 digits (never invent digits!)
+    const plainDigits = clean.replace(/\D/g, '');
+    if (plainDigits && plainDigits.length >= 7) {
+      const stripped = plainDigits.startsWith('0') ? plainDigits.slice(1) : plainDigits;
+      const display = '+91 ' + stripped;
+      return { display, tel: 'tel:+91' + stripped, digits: stripped, isValid: true, isMobile: false };
+    }
+
+    return { display: trimmed, tel: 'tel:' + trimmed.replace(/\s+/g, ''), isValid: false, isMobile: false };
   }
 
   // ── Section 1: Two-line Today Hours ──
@@ -832,6 +829,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (filterMode === 'no-website') summaryLine.textContent = total + ' of ' + rawPlaces.length + ' places have no active website';
     else if (activeOnlyCheckbox && activeOnlyCheckbox.checked) summaryLine.textContent = total + ' places with active websites found';
+    else if (lastSearchTotalRequests !== null) summaryLine.textContent = total + ' places found, ' + lastSearchTotalRequests + ' Google requests used';
     else summaryLine.textContent = total + ' places found: ' + phoneCount + ' with phone, ' + webCount + ' with active website';
 
     downloadExcelBtn.disabled = total === 0;

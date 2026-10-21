@@ -6,14 +6,26 @@ const ExcelJS = require('exceljs');
 const crypto = require('crypto');
 const zlib = require('zlib');
 
+const {
+  cleanPhoneDigits,
+  isIndianMobileNumber,
+  formatIndianPhoneNumber,
+  getWhatsAppNumber,
+  buildTelUri
+} = require('./phone_helpers');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ──────────────────────────────────────────────
-// Configuration & Limits (Sections 1-4)
+// Configuration & Limits (Sections 1-5)
 // ──────────────────────────────────────────────
-const SEARCH_SECRET = (process.env.SEARCH_SECRET || 'locfinder_hmac_secret_2026').trim();
-const SEARCH_REQUEST_CAP = parseInt(process.env.SEARCH_REQUEST_CAP, 10) || 300;
+let SEARCH_SECRET = (process.env.SEARCH_SECRET || '').trim();
+if (!SEARCH_SECRET) {
+  console.warn('[Server Warning] SEARCH_SECRET is not set in environment variables! Generating a temporary random secret for this process.');
+  SEARCH_SECRET = crypto.randomBytes(32).toString('hex');
+}
+const SEARCH_REQUEST_CAP = parseInt(process.env.SEARCH_REQUEST_CAP, 10) || 600;
 const DAILY_REQUEST_CAP = parseInt(process.env.DAILY_REQUEST_CAP, 10) || 1500;
 
 // Load aliases.json (typed legacy name -> official name)
@@ -237,30 +249,9 @@ function formatOpeningHours(openingHours) {
 }
 
 // ──────────────────────────────────────────────
-// Phone normalisation
-// Priority: whatsappNumber override → nationalPhoneNumber → internationalPhoneNumber
-// Strips spaces, dashes and a leading 0 from nationalPhoneNumber, or uses internationalPhoneNumber.
+// Phone normalisation & WhatsApp helpers
 // ──────────────────────────────────────────────
-function cleanPhoneDigits(raw) {
-  if (!raw || typeof raw !== 'string' || raw === 'Not available') return null;
-  let s = raw.trim();
-  if (!s) return null;
-  // Strip spaces and dashes
-  s = s.replace(/[\s\-]/g, '');
-  // Strip leading 0 (e.g. 09876543210 -> 9876543210)
-  s = s.replace(/^0+/, '');
-  // Extract all digits
-  let digits = s.replace(/\D/g, '');
-  if (!digits) return null;
-  // Strip +91 / 91 country code prefix if 12 or 11 digits
-  if ((digits.length === 12 || digits.length === 11) && digits.startsWith('91')) {
-    digits = digits.slice(2);
-  }
-  return digits || null;
-}
-
 function normalisePhone(national, international) {
-  // Strip spaces, dashes and a leading 0 from nationalPhoneNumber, or use internationalPhoneNumber
   const fromNat = cleanPhoneDigits(national);
   if (fromNat) return fromNat;
   const fromInt = cleanPhoneDigits(international);
@@ -268,90 +259,13 @@ function normalisePhone(national, international) {
   return null;
 }
 
-// Indian mobile: 10 digits starting with 6, 7, 8 (except 80 which is Bengaluru landline) or 9
 function isIndianMobile(digits) {
-  if (!digits || digits.length !== 10) return false;
-  if (digits.startsWith('80')) return false;
-  return /^[6-9]/.test(digits);
-}
-
-// Returns 91XXXXXXXXXX for WhatsApp (null if not Indian mobile)
-function getWhatsAppNumber(whatsappOverride, national, international) {
-  if (whatsappOverride) {
-    const d = cleanPhoneDigits(whatsappOverride);
-    if (d && isIndianMobile(d)) return '91' + d;
-  }
-  const d = normalisePhone(national, international);
-  if (d && isIndianMobile(d)) return '91' + d;
-  return null;
-}
-
-// Display format:
-// Indian mobile: +91 XXXXX XXXXX
-// Landlines with 2-digit STD code (e.g. 80 for Bengaluru): +91 80 XXXX XXXX
-// Landlines with 3-digit STD code (e.g. 821 for Mysuru): +91 821 XXX XXXX
-function formatIndianPhoneNumber(raw) {
-  if (!raw || typeof raw !== 'string' || raw === 'Not available') return 'Not available';
-  const s = raw.trim().replace(/[\s\-]/g, '');
-  let digits = s.replace(/\D/g, '');
-  if (!digits) return raw;
-
-  // Strip +91 / 91 country code prefix if 12 or 11 digits
-  if ((digits.length === 12 || digits.length === 11) && digits.startsWith('91')) {
-    digits = digits.slice(2);
-  }
-  // Strip leading 0 (STD trunk prefix e.g. 080... or 098...)
-  if (digits.length === 11 && digits.startsWith('0')) {
-    digits = digits.slice(1);
-  } else if (digits.length > 10 && digits.startsWith('0')) {
-    digits = digits.slice(1);
-  }
-
-  if (digits.length === 10) {
-    // 2-digit STD codes: 80, 11, 22, 33, 44, 20, 40, 79
-    if (/^(80|11|22|33|44|20|40|79)/.test(digits)) {
-      const std = digits.slice(0, 2);
-      const part1 = digits.slice(2, 6);
-      const part2 = digits.slice(6, 10);
-      return `+91 ${std} ${part1} ${part2}`;
-    }
-    // 3-digit STD codes (e.g. 821 for Mysuru, 824 for Mangaluru, 836, etc.)
-    if (/^(821|824|836|816|820|831|832|847|825|838|839|848|818|819|817|827|822|823)/.test(digits)) {
-      const std = digits.slice(0, 3);
-      const part1 = digits.slice(3, 6);
-      const part2 = digits.slice(6, 10);
-      return `+91 ${std} ${part1} ${part2}`;
-    }
-    // Mobile number: +91 XXXXX XXXXX
-    return `+91 ${digits.slice(0, 5)} ${digits.slice(5, 10)}`;
-  }
-
-  // 8-digit landline without STD code (e.g. 23456789)
-  if (digits.length === 8) {
-    return `+91 80 ${digits.slice(0, 4)} ${digits.slice(4, 8)}`;
-  }
-
-  if (digits.length >= 7) {
-    return `+91 ${digits}`;
-  }
-
-  return raw;
+  return isIndianMobileNumber(digits);
 }
 
 function formatPhoneDisplay(digits) {
   if (!digits) return null;
   return formatIndianPhoneNumber(digits);
-}
-
-// tel: URI — tel:+91XXXXXXXXXX without spaces
-function buildTelUri(digitsOrRaw) {
-  if (!digitsOrRaw) return null;
-  const digits = cleanPhoneDigits(digitsOrRaw);
-  if (!digits) return null;
-  if (digits.length === 10 || digits.length >= 7) {
-    return `tel:+91${digits}`;
-  }
-  return `tel:${digits}`;
 }
 
 // HTML escape
@@ -441,15 +355,37 @@ function incrementDailyCounter(count = 1) {
 }
 
 // Exact wordings required by Section 3:
-// Restaurants: "restaurant", "cafe", "bakery", "fast food", "dhaba", "mess", "tiffin", "biryani"
+// Restaurants: "restaurant", "hotel", "cafe", "south indian restaurant", "bakery", "fast food", "family restaurant", "vegetarian restaurant", "dhaba", "mess", "tiffin", "biryani", "military hotel"
 const RESTAURANT_WORDINGS = [
-  'restaurant', 'cafe', 'bakery', 'fast food', 'dhaba', 'mess', 'tiffin', 'biryani'
+  'restaurant', 'hotel', 'cafe', 'south indian restaurant', 'bakery', 'fast food',
+  'family restaurant', 'vegetarian restaurant', 'dhaba', 'mess', 'tiffin', 'biryani', 'military hotel'
 ];
 
 // Stays: "hotel", "lodge", "guest house", "homestay", "resort", "PG hostel", "service apartment"
 const STAY_WORDINGS = [
   'hotel', 'lodge', 'guest house', 'homestay', 'resort', 'PG hostel', 'service apartment'
 ];
+
+function getWordingsForCategory(category) {
+  const norm = (category || 'both').toLowerCase().trim();
+  if (norm === 'restaurants' || norm === 'restaurant') {
+    return [...RESTAURANT_WORDINGS];
+  }
+  if (norm === 'stays' || norm === 'stay' || norm === 'hotels') {
+    return [...STAY_WORDINGS];
+  }
+  // Category Both runs the union with duplicate wordings removed
+  const set = new Set([...RESTAURANT_WORDINGS, ...STAY_WORDINGS]);
+  return Array.from(set);
+}
+
+function getMaxTileDepth(wording) {
+  const w = (wording || '').toLowerCase().trim();
+  if (w === 'restaurant' || w === 'hotel' || w === 'cafe' || w === 'lodge') {
+    return 5;
+  }
+  return 2;
+}
 
 // Area Types for Google Places location resolution
 const AREA_TYPES = new Set([
@@ -608,10 +544,11 @@ async function resolveLocation(rawText) {
   };
 }
 
-// HMAC cursor signing & verification
+// HMAC cursor signing & verification (with zlib compression)
 function signCursor(payload) {
-  const jsonStr = JSON.stringify(payload);
-  const b64 = Buffer.from(jsonStr, 'utf8').toString('base64url');
+  const jsonBuf = Buffer.from(JSON.stringify(payload), 'utf8');
+  const compressed = zlib.deflateSync(jsonBuf);
+  const b64 = compressed.toString('base64url');
   const hmac = crypto.createHmac('sha256', SEARCH_SECRET).update(b64).digest('hex');
   return `${b64}.${hmac}`;
 }
@@ -627,15 +564,21 @@ function verifyCursor(token) {
     return null;
   }
   try {
-    const jsonStr = Buffer.from(b64, 'base64url').toString('utf8');
+    const compressed = Buffer.from(b64, 'base64url');
+    let jsonStr;
+    try {
+      jsonStr = zlib.inflateSync(compressed).toString('utf8');
+    } catch {
+      jsonStr = compressed.toString('utf8');
+    }
     return JSON.parse(jsonStr);
   } catch {
     return null;
   }
 }
 
-// Single Google Places search with retry and backoff
-async function googleTextSearchSingle(wording, tile, pageToken = null, maxRetries = 2) {
+// Single Google Places search returning raw places count and nextPageToken
+async function googleTextSearchSingle(wording, tile, pageToken = null) {
   if (!GOOGLE_KEY) throw { status: 503, message: 'Google Places API key is not configured.' };
   const url = 'https://places.googleapis.com/v1/places:searchText';
 
@@ -651,49 +594,35 @@ async function googleTextSearchSingle(wording, tile, pageToken = null, maxRetrie
   };
   if (pageToken) bodyObj.pageToken = pageToken;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      checkDailyLimit(1);
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': GOOGLE_KEY,
-          'X-Goog-FieldMask': GOOGLE_SEARCH_FIELD_MASK
-        },
-        body: JSON.stringify(bodyObj)
-      });
-      incrementDailyCounter(1);
+  checkDailyLimit(1);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': GOOGLE_KEY,
+      'X-Goog-FieldMask': GOOGLE_SEARCH_FIELD_MASK
+    },
+    body: JSON.stringify(bodyObj)
+  });
+  incrementDailyCounter(1);
 
-      if (res.status === 429) {
-        if (attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, (attempt + 1) * 800));
-          continue;
-        }
-        throw { status: 429, code: 'GOOGLE_429', message: 'Google Places API quota/rate limit reached (429).' };
-      }
-      if (res.status === 403) {
-        throw { status: 403, code: 'GOOGLE_403', message: 'Google Places API key is invalid or restricted (403).' };
-      }
-      if (!res.ok) {
-        const txt = await res.text().catch(() => '');
-        throw { status: res.status, message: `Places search failed (${res.status}): ${txt.slice(0, 150)}` };
-      }
-      const data = await res.json();
-      const places = (data.places || []).filter(p => p.businessStatus !== 'CLOSED_PERMANENTLY');
-      return { places, nextPageToken: data.nextPageToken || null };
-    } catch (err) {
-      if (err.status === 429 && attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, (attempt + 1) * 800));
-        continue;
-      }
-      if (attempt < maxRetries && (!err.status || err.status >= 500)) {
-        await new Promise(r => setTimeout(r, 400));
-        continue;
-      }
-      throw err;
-    }
+  if (res.status === 403) {
+    throw { status: 403, code: 'GOOGLE_403', message: 'Google Places API key is invalid or restricted (403).' };
   }
+  if (res.status === 429) {
+    throw { status: 429, code: 'GOOGLE_429', message: 'Google Places API quota/rate limit reached (429).' };
+  }
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw { status: res.status, message: `Places search failed (${res.status}): ${txt.slice(0, 150)}` };
+  }
+  const data = await res.json();
+  const rawPlaces = data.places || [];
+  return {
+    places: rawPlaces,
+    rawCount: rawPlaces.length,
+    nextPageToken: data.nextPageToken || null
+  };
 }
 
 async function runInBatches(tasks, batchSize = 5, delayMs = 100) {
@@ -767,8 +696,45 @@ async function googlePlaceDetailsWithRetry(placeId) {
 }
 
 // ──────────────────────────────────────────────
-// Map Google Place → unified place object
+// Classification & Mapping for Google Places (Section 3)
 // ──────────────────────────────────────────────
+const RESTAURANT_TYPES = new Set([
+  'restaurant', 'food', 'cafe', 'bakery', 'meal_takeaway', 'meal_delivery',
+  'fast_food_restaurant', 'bar', 'pub', 'bistro', 'diner', 'ice_cream_shop',
+  'coffee_shop', 'tea_house', 'south_indian_restaurant', 'indian_restaurant',
+  'chicken_restaurant', 'vegetarian_restaurant'
+]);
+
+const STAY_TYPES = new Set([
+  'lodging', 'hotel', 'motel', 'hostel', 'guest_house', 'bed_and_breakfast',
+  'resort_hotel', 'extended_stay_hotel', 'farmstay', 'campground'
+]);
+
+function classifyGooglePlace(gp) {
+  const pType = (gp.primaryType || '').toLowerCase();
+  const types = (gp.types || []).map(t => (t || '').toLowerCase());
+  const hasFood = RESTAURANT_TYPES.has(pType) || types.some(t => RESTAURANT_TYPES.has(t));
+  const hasStay = STAY_TYPES.has(pType) || types.some(t => STAY_TYPES.has(t));
+
+  if (hasFood && hasStay) return 'Restaurant and Stay';
+  if (hasFood) return 'Restaurant';
+  if (hasStay) return 'Stay';
+  return null;
+}
+
+function matchesCategory(computedType, category) {
+  const norm = (category || 'both').toLowerCase().trim();
+  if (!computedType) return false;
+  if (computedType === 'Restaurant and Stay') return true;
+  if (norm === 'restaurants' || norm === 'restaurant') {
+    return computedType === 'Restaurant';
+  }
+  if (norm === 'stays' || norm === 'stay' || norm === 'hotels') {
+    return computedType === 'Stay';
+  }
+  return computedType === 'Restaurant' || computedType === 'Stay';
+}
+
 function mapGooglePlace(gp, computedType) {
   const name = gp.displayName?.text || 'Unknown Place';
   const address = gp.formattedAddress || 'Not available';
@@ -793,33 +759,7 @@ function mapGooglePlace(gp, computedType) {
   }
 
   // Determine type from Google primaryType and types array (never from words in the name)
-  let type = computedType;
-  if (!type) {
-    const RESTAURANT_TYPES = new Set([
-      'restaurant', 'food', 'cafe', 'bakery', 'meal_takeaway', 'meal_delivery',
-      'fast_food_restaurant', 'bar', 'pub', 'bistro', 'diner', 'ice_cream_shop',
-      'coffee_shop', 'tea_house', 'south_indian_restaurant', 'indian_restaurant',
-      'chicken_restaurant', 'vegetarian_restaurant'
-    ]);
-    const STAY_TYPES = new Set([
-      'lodging', 'hotel', 'motel', 'hostel', 'guest_house', 'bed_and_breakfast',
-      'resort_hotel', 'extended_stay_hotel', 'farmstay', 'campground'
-    ]);
-
-    const pType = (gp.primaryType || '').toLowerCase();
-    if (RESTAURANT_TYPES.has(pType)) {
-      type = 'Restaurant';
-    } else if (STAY_TYPES.has(pType)) {
-      type = 'Stay';
-    } else {
-      const types = (gp.types || []).map(t => t.toLowerCase());
-      const hasRest = types.some(t => RESTAURANT_TYPES.has(t));
-      const hasStay = types.some(t => STAY_TYPES.has(t));
-      if (hasRest) type = 'Restaurant';
-      else if (hasStay) type = 'Stay';
-      else type = 'Restaurant';
-    }
-  }
+  const type = computedType || classifyGooglePlace(gp) || 'Restaurant';
 
   return {
     id: gp.id || crypto.randomBytes(8).toString('hex'),
@@ -998,16 +938,176 @@ app.post('/api/resolve-location', async (req, res) => {
 // ──────────────────────────────────────────────
 // Session store for stepped search (Section 3)
 // ──────────────────────────────────────────────
-const searchSessionStore = new Map();
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of searchSessionStore.entries()) {
-    if (now - v.timestamp > 30 * 60 * 1000) searchSessionStore.delete(k);
+// Shared Search Engine: processSearchQueue (Sections 1, 2, 3, 4, 6)
+// ──────────────────────────────────────────────
+async function processSearchQueue({
+  placeId,
+  category,
+  viewport,
+  queue,
+  seenIds,       // Set<string>
+  allPlaces,     // Array of mapped places
+  totalRequestsUsed,
+  splitCount = 0,
+  wordingStats = {},
+  errors = [],
+  maxRequestsThisStep = 15
+}) {
+  const normCategory = (category || 'both').toLowerCase().trim();
+  const vp = viewport;
+  const debugTarget = (process.env.DEBUG_PLACE_NAME || '').trim().toLowerCase();
+
+  let requestsInStep = 0;
+  const newPlacesInStep = [];
+
+  while (queue.length > 0 && requestsInStep < maxRequestsThisStep && totalRequestsUsed < SEARCH_REQUEST_CAP) {
+    const batchSize = Math.min(5, maxRequestsThisStep - requestsInStep, SEARCH_REQUEST_CAP - totalRequestsUsed, queue.length);
+    const currentBatch = queue.splice(0, batchSize);
+
+    const batchPromises = currentBatch.map(async (item) => {
+      try {
+        const resSingle = await googleTextSearchSingle(item.wording, item.tile, item.pageToken);
+        return { item, res: resSingle, error: null };
+      } catch (err) {
+        return { item, res: null, error: err };
+      }
+    });
+
+    const batchResults = await Promise.all(batchPromises);
+    requestsInStep += batchResults.length;
+    totalRequestsUsed += batchResults.length;
+
+    for (const { item, res: resSingle, error } of batchResults) {
+      if (error) {
+        // Fatal errors: stop search immediately on 403 or daily limit
+        if (error.status === 403 || error.code === 'DAILY_LIMIT_EXCEEDED') {
+          throw error;
+        }
+
+        // Retry up to 2 times for 429 or 5xx with backoff by putting item back in queue
+        const retries = item.retries || 0;
+        if (retries < 2 && (error.status === 429 || !error.status || error.status >= 500)) {
+          await new Promise(r => setTimeout(r, (retries + 1) * 300));
+          queue.push({
+            ...item,
+            retries: retries + 1
+          });
+          continue;
+        }
+
+        // Final failure: record in errors list and log
+        errors.push({
+          wording: item.wording,
+          status: error.status || 500,
+          message: error.message || 'Request failed'
+        });
+        console.error(`[Search Error Final] Wording: "${item.wording}", Status: ${error.status || 500}, Message: ${error.message}`);
+        continue;
+      }
+
+      for (const gp of resSingle.places) {
+        const name = gp.displayName?.text || '';
+        const isDebugTarget = debugTarget && name.toLowerCase().includes(debugTarget);
+
+        if (gp.businessStatus === 'CLOSED_PERMANENTLY') {
+          if (isDebugTarget) {
+            console.log(`[DEBUG_PLACE_NAME] "${name}" seen in wording "${item.wording}", tile depth ${item.tile.depth}, but dropped: CLOSED_PERMANENTLY`);
+          }
+          continue;
+        }
+
+        if (gp.location && vp && vp.low && vp.high) {
+          const { latitude, longitude } = gp.location;
+          if (latitude < vp.low.latitude || latitude > vp.high.latitude ||
+              longitude < vp.low.longitude || longitude > vp.high.longitude) {
+            if (isDebugTarget) {
+              console.log(`[DEBUG_PLACE_NAME] "${name}" seen in wording "${item.wording}", tile depth ${item.tile.depth}, but dropped: outside viewport (lat: ${latitude}, lng: ${longitude})`);
+            }
+            continue;
+          }
+        }
+
+        const computedType = classifyGooglePlace(gp);
+        if (!computedType || !matchesCategory(computedType, normCategory)) {
+          if (isDebugTarget) {
+            console.log(`[DEBUG_PLACE_NAME] "${name}" seen in wording "${item.wording}", tile depth ${item.tile.depth}, but dropped: wrong category (computedType: ${computedType}, primaryType: ${gp.primaryType}, types: ${gp.types?.join(',')})`);
+          }
+          continue;
+        }
+
+        if (gp.id && !seenIds.has(gp.id)) {
+          seenIds.add(gp.id);
+          const mapped = mapGooglePlace(gp, computedType);
+          newPlacesInStep.push(mapped);
+          allPlaces.push(mapped);
+          wordingStats[item.wording] = (wordingStats[item.wording] || 0) + 1;
+
+          if (isDebugTarget) {
+            console.log(`[DEBUG_PLACE_NAME] "${name}" KEPT! Wording: "${item.wording}", tile depth: ${item.tile.depth}, type: "${computedType}", placeId: "${gp.id}"`);
+          }
+        }
+      }
+
+      if (item.pageIndex < 2 && resSingle.nextPageToken) {
+        queue.push({
+          tile: item.tile,
+          wording: item.wording,
+          pageToken: resSingle.nextPageToken,
+          pageIndex: item.pageIndex + 1,
+          retries: 0
+        });
+      } else if (item.pageIndex === 2) {
+        const maxDepth = getMaxTileDepth(item.wording);
+        if ((resSingle.rawCount >= 20 || !!resSingle.nextPageToken) && item.tile.depth < maxDepth) {
+          const nextDepth = item.tile.depth + 1;
+          const latMid = (item.tile.latMin + item.tile.latMax) / 2;
+          const lngMid = (item.tile.lngMin + item.tile.lngMax) / 2;
+          const subTiles = [
+            { latMin: latMid, latMax: item.tile.latMax, lngMin: item.tile.lngMin, lngMax: lngMid, depth: nextDepth },
+            { latMin: latMid, latMax: item.tile.latMax, lngMin: lngMid, lngMax: item.tile.lngMax, depth: nextDepth },
+            { latMin: item.tile.latMin, latMax: latMid, lngMin: item.tile.lngMin, lngMax: lngMid, depth: nextDepth },
+            { latMin: item.tile.latMin, latMax: latMid, lngMin: lngMid, lngMax: item.tile.lngMax, depth: nextDepth }
+          ];
+          for (const st of subTiles) {
+            queue.push({
+              tile: st,
+              wording: item.wording,
+              pageToken: null,
+              pageIndex: 0,
+              retries: 0
+            });
+          }
+          splitCount++;
+          console.log(`[Tile Split] Wording: "${item.wording}", Depth: ${nextDepth}`);
+        }
+      }
+    }
   }
-}, 5 * 60 * 1000);
+
+  const isCapped = totalRequestsUsed >= SEARCH_REQUEST_CAP && queue.length > 0;
+  const isComplete = queue.length === 0 || totalRequestsUsed >= SEARCH_REQUEST_CAP;
+
+  if (isComplete) {
+    console.log(`[Search Diagnostics] Total places: ${allPlaces.length}, Requests used: ${totalRequestsUsed}, Tiles unsearched: ${queue.length}, Splits: ${splitCount}, Errors: ${errors.length}, Places per wording: ${JSON.stringify(wordingStats)}`);
+  }
+
+  return {
+    places: newPlacesInStep,
+    allPlaces,
+    seenIds,
+    queue,
+    requestsInStep,
+    totalRequestsUsed,
+    splitCount,
+    wordingStats,
+    errors,
+    isComplete,
+    capped: isCapped
+  };
+}
 
 // ──────────────────────────────────────────────
-// POST /api/search/step — Adaptive tiling with HMAC cursor (Section 3)
+// POST /api/search/step — Adaptive tiling with HMAC cursor (Section 1-5)
 // ──────────────────────────────────────────────
 app.post('/api/search/step', async (req, res) => {
   try {
@@ -1017,42 +1117,40 @@ app.post('/api/search/step', async (req, res) => {
     }
 
     const normCategory = (category || 'both').toLowerCase().trim();
-
-    // Check cache by resolved placeId and category first
     const cacheKey = `resolved_${placeId}_${normCategory}`;
-    const cached = searchCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
-      console.log(`[Cache Hit] placeId: ${placeId} (${normCategory}) -> ${cached.places.length} places`);
-      return res.json({
-        places: cached.places,
-        requestsInStep: 0,
-        totalRequestsUsed: cached.totalRequestsUsed || 0,
-        nextCursor: null,
-        isComplete: true,
-        cached: true
-      });
-    }
-
-    let sessionId;
-    let queue = [];
-    let vp = viewport;
 
     if (!cursor) {
-      // Start a brand new search
-      sessionId = crypto.randomBytes(8).toString('hex');
-      let wordings = [];
-      if (normCategory === 'restaurants' || normCategory === 'restaurant') {
-        wordings = [...RESTAURANT_WORDINGS];
-      } else if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels') {
-        wordings = [...STAY_WORDINGS];
-      } else {
-        wordings = [...RESTAURANT_WORDINGS, ...STAY_WORDINGS];
+      const cached = searchCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+        console.log(`[Cache Hit] placeId: ${placeId} (${normCategory}) -> ${cached.places.length} places`);
+        return res.json({
+          places: cached.places,
+          requestsInStep: 0,
+          totalRequestsUsed: cached.totalRequestsUsed || 0,
+          nextCursor: null,
+          isComplete: true,
+          capped: false,
+          errors: [],
+          cached: true
+        });
       }
+    }
 
+    let queue = [];
+    let vp = viewport;
+    let seenIds = new Set();
+    let allPlaces = [];
+    let totalRequestsUsed = 0;
+    let splitCount = 0;
+    let wordingStats = {};
+    let errors = [];
+
+    if (!cursor) {
       if (!vp || !vp.low || !vp.high) {
         return res.status(400).json({ error: 'Valid viewport rectangle is required.' });
       }
 
+      const wordings = getWordingsForCategory(normCategory);
       const initialTile = {
         latMin: vp.low.latitude,
         latMax: vp.high.latitude,
@@ -1065,158 +1163,82 @@ app.post('/api/search/step', async (req, res) => {
         tile: initialTile,
         wording: w,
         pageToken: null,
-        pageIndex: 0
+        pageIndex: 0,
+        retries: 0
       }));
-
-      searchSessionStore.set(sessionId, {
-        seenIds: new Set(),
-        places: [],
-        totalRequestsUsed: 0,
-        timestamp: Date.now()
-      });
     } else {
-      // Resume from verified HMAC cursor
       const payload = verifyCursor(cursor);
-      if (!payload || !payload.sessionId) {
+      if (!payload || !payload.queue) {
         return res.status(400).json({ error: 'Invalid or expired cursor.' });
       }
-      sessionId = payload.sessionId;
       queue = payload.queue || [];
       vp = payload.viewport || viewport;
+      seenIds = new Set(payload.seenIds || []);
+      allPlaces = payload.allPlaces || [];
+      totalRequestsUsed = payload.totalRequestsUsed || 0;
+      splitCount = payload.splitCount || 0;
+      wordingStats = payload.wordingStats || {};
+      errors = payload.errors || [];
+    }
 
-      if (!searchSessionStore.has(sessionId)) {
-        searchSessionStore.set(sessionId, {
-          seenIds: new Set(payload.seenIds || []),
-          places: [],
-          totalRequestsUsed: payload.totalRequestsUsed || 0,
-          timestamp: Date.now()
+    const stepResult = await processSearchQueue({
+      placeId,
+      category: normCategory,
+      viewport: vp,
+      queue,
+      seenIds,
+      allPlaces,
+      totalRequestsUsed,
+      splitCount,
+      wordingStats,
+      errors,
+      maxRequestsThisStep: 15
+    });
+
+    if (stepResult.isComplete) {
+      if (!stepResult.capped && stepResult.errors.length === 0) {
+        searchCache.set(cacheKey, {
+          timestamp: Date.now(),
+          places: stepResult.allPlaces,
+          totalRequestsUsed: stepResult.totalRequestsUsed
         });
       }
-    }
-
-    const session = searchSessionStore.get(sessionId);
-    const MAX_STEP_REQUESTS = 15;
-    let requestsInStep = 0;
-    const newPlacesInStep = [];
-
-    // Process queue up to MAX_STEP_REQUESTS in parallel batches of up to 5
-    while (queue.length > 0 && requestsInStep < MAX_STEP_REQUESTS && session.totalRequestsUsed < SEARCH_REQUEST_CAP) {
-      const batchSize = Math.min(5, MAX_STEP_REQUESTS - requestsInStep, SEARCH_REQUEST_CAP - session.totalRequestsUsed, queue.length);
-      const currentBatch = queue.splice(0, batchSize);
-
-      const batchPromises = currentBatch.map(async (item) => {
-        try {
-          const resSingle = await googleTextSearchSingle(item.wording, item.tile, item.pageToken);
-          return { item, res: resSingle, error: null };
-        } catch (err) {
-          return { item, res: { places: [], nextPageToken: null }, error: err };
-        }
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      requestsInStep += batchResults.length;
-      session.totalRequestsUsed += batchResults.length;
-
-      for (const { item, res: resSingle, error } of batchResults) {
-        if (error) {
-          console.warn(`[Step Request Error] "${item.wording}":`, error.message);
-          continue;
-        }
-
-        for (const gp of resSingle.places) {
-          // Keep only places whose coordinates are inside the resolved overall viewport
-          if (gp.location && vp && vp.low && vp.high) {
-            const { latitude, longitude } = gp.location;
-            if (latitude < vp.low.latitude || latitude > vp.high.latitude ||
-                longitude < vp.low.longitude || longitude > vp.high.longitude) {
-              continue;
-            }
-          }
-
-          if (gp.id && !session.seenIds.has(gp.id)) {
-            session.seenIds.add(gp.id);
-            const mapped = mapGooglePlace(gp);
-            newPlacesInStep.push(mapped);
-            session.places.push(mapped);
-          }
-        }
-
-        // Pagination: fetch up to 3 pages (pageIndex 0, 1, 2)
-        if (resSingle.nextPageToken && item.pageIndex < 2) {
-          queue.push({
-            tile: item.tile,
-            wording: item.wording,
-            pageToken: resSingle.nextPageToken,
-            pageIndex: item.pageIndex + 1
-          });
-        } else if (resSingle.nextPageToken && item.pageIndex === 2) {
-          // Reached 60-result cap for this tile and wording!
-          // If depth < 4, split tile into 4 sub-tiles and repeat
-          if (item.tile.depth < 4) {
-            const latMid = (item.tile.latMin + item.tile.latMax) / 2;
-            const lngMid = (item.tile.lngMin + item.tile.lngMax) / 2;
-            const subTiles = [
-              { latMin: latMid, latMax: item.tile.latMax, lngMin: item.tile.lngMin, lngMax: lngMid, depth: item.tile.depth + 1 },
-              { latMin: latMid, latMax: item.tile.latMax, lngMin: lngMid, lngMax: item.tile.lngMax, depth: item.tile.depth + 1 },
-              { latMin: item.tile.latMin, latMax: latMid, lngMin: item.tile.lngMin, lngMax: lngMid, depth: item.tile.depth + 1 },
-              { latMin: item.tile.latMin, latMax: latMid, lngMin: lngMid, lngMax: item.tile.lngMax, depth: item.tile.depth + 1 }
-            ];
-            for (const st of subTiles) {
-              queue.push({
-                tile: st,
-                wording: item.wording,
-                pageToken: null,
-                pageIndex: 0
-              });
-            }
-          }
-        }
-      }
-    }
-
-    const isCapped = session.totalRequestsUsed >= SEARCH_REQUEST_CAP;
-    const isComplete = queue.length === 0 || isCapped;
-
-    if (isComplete) {
-      // Cache results by resolved placeId and category
-      searchCache.set(cacheKey, {
-        timestamp: Date.now(),
-        places: session.places,
-        totalRequestsUsed: session.totalRequestsUsed
-      });
-      searchSessionStore.delete(sessionId);
       return res.json({
-        places: newPlacesInStep,
-        requestsInStep,
-        totalRequestsUsed: session.totalRequestsUsed,
+        places: stepResult.places,
+        requestsInStep: stepResult.requestsInStep,
+        totalRequestsUsed: stepResult.totalRequestsUsed,
         nextCursor: null,
         isComplete: true,
-        capped: isCapped
+        capped: stepResult.capped,
+        errors: stepResult.errors
       });
     } else {
-      session.timestamp = Date.now();
       const nextCursor = signCursor({
-        sessionId,
         placeId,
         category: normCategory,
         viewport: vp,
-        queue,
-        seenIds: Array.from(session.seenIds).slice(0, 500),
-        totalRequestsUsed: session.totalRequestsUsed,
+        queue: stepResult.queue,
+        seenIds: Array.from(stepResult.seenIds),
+        allPlaces: stepResult.allPlaces,
+        totalRequestsUsed: stepResult.totalRequestsUsed,
+        splitCount: stepResult.splitCount,
+        wordingStats: stepResult.wordingStats,
+        errors: stepResult.errors,
         timestamp: Date.now()
       });
       return res.json({
-        places: newPlacesInStep,
-        requestsInStep,
-        totalRequestsUsed: session.totalRequestsUsed,
+        places: stepResult.places,
+        requestsInStep: stepResult.requestsInStep,
+        totalRequestsUsed: stepResult.totalRequestsUsed,
         nextCursor,
         isComplete: false,
-        capped: false
+        capped: false,
+        errors: stepResult.errors
       });
     }
   } catch (err) {
     console.error('[Search Step Error]', err.message || err);
-    return res.status(err.status || 500).json({ error: err.message || 'Search step failed.' });
+    return res.status(err.status || 500).json({ error: err.message || 'Search step failed.', code: err.code });
   }
 });
 
@@ -1327,86 +1349,62 @@ async function handleSearch(req, res) {
       });
     }
 
-    // Perform search across tiles until complete
-    let cursor = null;
-    const collectedPlaces = [];
-    let finalRequests = 0;
+    // Perform search across tiles until complete using processSearchQueue (Section 1)
+    const wordings = getWordingsForCategory(normCategory);
+    const initialTile = {
+      latMin: area.viewport.low.latitude,
+      latMax: area.viewport.high.latitude,
+      lngMin: area.viewport.low.longitude,
+      lngMax: area.viewport.high.longitude,
+      depth: 1
+    };
 
-    while (true) {
-      // Internal step call
-      const stepRes = await (async () => {
-        const bodyObj = { placeId: area.placeId, category: normCategory, viewport: area.viewport, cursor };
-        const mockRes = {
-          _data: null,
-          status: function() { return this; },
-          json: function(d) { this._data = d; return this; }
-        };
-        // Reuse logic by executing steps
-        let sId = cursor ? verifyCursor(cursor)?.sessionId : null;
-        let q = [];
-        if (!cursor) {
-          sId = crypto.randomBytes(8).toString('hex');
-          const words = normCategory === 'restaurants' ? RESTAURANT_WORDINGS : normCategory === 'stays' ? STAY_WORDINGS : [...RESTAURANT_WORDINGS, ...STAY_WORDINGS];
-          const it = { latMin: area.viewport.low.latitude, latMax: area.viewport.high.latitude, lngMin: area.viewport.low.longitude, lngMax: area.viewport.high.longitude, depth: 1 };
-          q = words.map(w => ({ tile: it, wording: w, pageToken: null, pageIndex: 0 }));
-          searchSessionStore.set(sId, { seenIds: new Set(), places: [], totalRequestsUsed: 0, timestamp: Date.now() });
-        } else {
-          const payload = verifyCursor(cursor);
-          sId = payload.sessionId;
-          q = payload.queue || [];
-        }
+    let queue = wordings.map(w => ({
+      tile: initialTile,
+      wording: w,
+      pageToken: null,
+      pageIndex: 0,
+      retries: 0
+    }));
 
-        const sess = searchSessionStore.get(sId);
-        let reqs = 0;
-        const newPl = [];
+    let seenIds = new Set();
+    let allPlaces = [];
+    let totalRequestsUsed = 0;
+    let splitCount = 0;
+    let wordingStats = {};
+    let errors = [];
+    let isComplete = false;
+    let isCapped = false;
 
-        while (q.length > 0 && reqs < 15 && sess.totalRequestsUsed < SEARCH_REQUEST_CAP) {
-          const bSize = Math.min(5, 15 - reqs, SEARCH_REQUEST_CAP - sess.totalRequestsUsed, q.length);
-          const cBatch = q.splice(0, bSize);
-          const bResults = await Promise.all(cBatch.map(async (item) => {
-            try {
-              const r = await googleTextSearchSingle(item.wording, item.tile, item.pageToken);
-              return { item, res: r };
-            } catch {
-              return { item, res: { places: [], nextPageToken: null } };
-            }
-          }));
-          reqs += bResults.length;
-          sess.totalRequestsUsed += bResults.length;
-
-          for (const { item, res: r } of bResults) {
-            for (const gp of r.places) {
-              if (gp.id && !sess.seenIds.has(gp.id)) {
-                sess.seenIds.add(gp.id);
-                const m = mapGooglePlace(gp);
-                newPl.push(m);
-                sess.places.push(m);
-              }
-            }
-            if (r.nextPageToken && item.pageIndex < 2) {
-              q.push({ tile: item.tile, wording: item.wording, pageToken: r.nextPageToken, pageIndex: item.pageIndex + 1 });
-            }
-          }
-        }
-
-        const comp = q.length === 0 || sess.totalRequestsUsed >= SEARCH_REQUEST_CAP;
-        if (comp) {
-          searchSessionStore.delete(sId);
-          return { places: newPl, isComplete: true, totalRequestsUsed: sess.totalRequestsUsed, nextCursor: null };
-        } else {
-          const nextCur = signCursor({ sessionId: sId, placeId: area.placeId, category: normCategory, viewport: area.viewport, queue: q, totalRequestsUsed: sess.totalRequestsUsed });
-          return { places: newPl, isComplete: false, totalRequestsUsed: sess.totalRequestsUsed, nextCursor: nextCur };
-        }
-      })();
-
-      collectedPlaces.push(...stepRes.places);
-      finalRequests = stepRes.totalRequestsUsed;
-      if (stepRes.isComplete) break;
-      cursor = stepRes.nextCursor;
+    while (!isComplete) {
+      const stepRes = await processSearchQueue({
+        placeId: area.placeId,
+        category: normCategory,
+        viewport: area.viewport,
+        queue,
+        seenIds,
+        allPlaces,
+        totalRequestsUsed,
+        splitCount,
+        wordingStats,
+        errors,
+        maxRequestsThisStep: 15
+      });
+      queue = stepRes.queue;
+      seenIds = stepRes.seenIds;
+      allPlaces = stepRes.allPlaces;
+      totalRequestsUsed = stepRes.totalRequestsUsed;
+      splitCount = stepRes.splitCount;
+      wordingStats = stepRes.wordingStats;
+      errors = stepRes.errors;
+      isComplete = stepRes.isComplete;
+      isCapped = stepRes.capped;
     }
 
-    const checked = await Promise.all(collectedPlaces.map(resolveWebsiteStatus));
-    searchCache.set(cacheKey, { timestamp: Date.now(), places: checked, totalRequestsUsed: finalRequests });
+    const checked = await Promise.all(allPlaces.map(resolveWebsiteStatus));
+    if (!isCapped && errors.length === 0) {
+      searchCache.set(cacheKey, { timestamp: Date.now(), places: checked, totalRequestsUsed });
+    }
 
     return res.json({
       cached: false,
@@ -1415,11 +1413,13 @@ async function handleSearch(req, res) {
       source: 'google',
       total: checked.length,
       results: checked,
-      totalRequestsUsed: finalRequests
+      totalRequestsUsed,
+      capped: isCapped,
+      errors
     });
   } catch (err) {
     console.error('[Search Error]', err.message || err);
-    return res.status(err.status || 500).json({ error: err.message || 'Search failed.' });
+    return res.status(err.status || 500).json({ error: err.message || 'Search failed.', code: err.code });
   }
 }
 

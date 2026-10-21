@@ -16,16 +16,13 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-function cleanPhoneDigits(raw) {
-  if (!raw || typeof raw !== 'string' || raw === 'Not available') return null;
-  let s = raw.trim().replace(/[\s\-]/g, '').replace(/^0+/, '');
-  let digits = s.replace(/\D/g, '');
-  if (!digits) return null;
-  if ((digits.length === 12 || digits.length === 11) && digits.startsWith('91')) {
-    digits = digits.slice(2);
-  }
-  return digits || null;
-}
+const {
+  cleanPhoneDigits,
+  isIndianMobileNumber,
+  formatIndianPhoneNumber,
+  getWhatsAppNumber,
+  buildTelUri
+} = require('./phone_helpers');
 
 function normalisePhone(national, international) {
   const fromNat = cleanPhoneDigits(national);
@@ -36,28 +33,12 @@ function normalisePhone(national, international) {
 }
 
 function isIndianMobile(digits) {
-  if (!digits || digits.length !== 10) return false;
-  if (digits.startsWith('80')) return false; // Bengaluru landline
-  return /^[6-9]/.test(digits);
+  return isIndianMobileNumber(digits);
 }
 
 function formatPhoneDisplay(digits) {
   if (!digits) return null;
-  if (digits.length === 10) {
-    return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
-  }
-  if (digits.length >= 7) {
-    return `+91 ${digits}`;
-  }
-  return digits;
-}
-
-function buildTelUri(digits) {
-  if (!digits) return null;
-  if (digits.length === 10 || digits.length >= 7) {
-    return `tel:+91${digits}`;
-  }
-  return `tel:${digits}`;
+  return formatIndianPhoneNumber(digits);
 }
 
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];

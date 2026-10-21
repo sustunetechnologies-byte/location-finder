@@ -42,82 +42,59 @@ A full-stack Node.js + Express web application that discovers hospitality busine
 ---
 
 ### 3. Automatic City-Wide Search & Vercel Stepped Execution (Section 3)
+### 3. Automatic City-Wide Search & Shared Search Engine (`processSearchQueue`)
 - **Automatic City-Wide Coverage**: Searching a city returns places for the whole city automatically.
-- **Viewport Bounds Filtering**: Uses the resolved area viewport as a `locationRestriction` rectangle. The typed city name is not appended to the place queries.
-- **Adaptive Tiling**:
-  - Starts with the whole viewport as tile depth 0.
-  - Runs Text Search with category wordings:
-    - **Restaurants**: `restaurant`, `cafe`, `bakery`, `fast food`, `dhaba`, `mess`, `tiffin`, `biryani`.
-    - **Stays**: `hotel`, `lodge`, `guest house`, `homestay`, `resort`, `PG hostel`, `service apartment`.
-  - Up to 3 pages fetched with `nextPageToken`.
-  - When a tile and wording reach the 60-result cap, it automatically splits the tile into 4 sub-tiles and repeats recursively up to depth 4.
-- **Vercel Timeout Mitigation (`POST /api/search/step`)**:
-  - The search executes in short steps initiated by the frontend.
-  - Each step makes at most 15 Google Places requests, run 5 at a time, finishing in under 8 seconds to stay safely within Vercel's serverless function timeout limits.
-  - Returns new places and an HMAC-SHA256 signed cursor (`SEARCH_SECRET`) preventing client tampering.
-  - Handles HTTP 429 rate limits with exponential backoff and retries.
-- **Live Progress & Background Health Checks**:
-  - Progress bar shows live count: *"Searching... 142 places found"*.
-  - Places are rendered immediately on the screen as they arrive in each step.
-  - Website status checks and shortener redirection run in the background via `POST /api/check-websites-batch`, updating each row as checks finish.
-- **Cost Safety Limits**:
-  - `SEARCH_REQUEST_CAP` (default 300) per search stops the search safely if reached, displaying *"Search stopped at the request limit, results may be incomplete"*.
-  - `DAILY_REQUEST_CAP` (default 1500) provides a daily best-effort safety counter.
-  - Displays requests used: `"Used 118 Google requests"`.
+- **Viewport Bounds Filtering**: Uses the resolved area viewport as a `locationRestriction` rectangle.
+- **Shared Engine (`processSearchQueue`)**: Both `/api/search/step` and `/api/search` execute the exact same shared queue engine with batching of 5, at most 15 requests per step.
+- **Wording Lists**:
+  - **Restaurants (13)**: `restaurant`, `hotel`, `cafe`, `south indian restaurant`, `bakery`, `fast food`, `family restaurant`, `vegetarian restaurant`, `dhaba`, `mess`, `tiffin`, `biryani`, `military hotel`.
+  - **Stays (7)**: `hotel`, `lodge`, `guest house`, `homestay`, `resort`, `PG hostel`, `service apartment`.
+  - **Both**: Union of all 19 unique wordings.
+- **Classification**: Places classified from Google's `primaryType` and `types` (never words in name). Places with both food and stay types are labelled `Restaurant and Stay`.
+- **Adaptive Tile Splitting**:
+  - Splitting evaluates after the third page of a tile and wording (`pageIndex === 2`).
+  - Triggers if the page was full (20 raw results) OR a `nextPageToken` was returned, and tile depth is below the max depth for that wording.
+  - **Max depth**: **5** for `restaurant`, `hotel`, `cafe`, `lodge`; **2** for all other niche wordings.
+  - Sub-tiles are logged without keys (`[Tile Split] Wording: "...", Depth: N`).
+- **Resilient Error Handling**:
+  - HTTP 429 and 5xx are retried up to 2 times with backoff in the queue.
+  - Final failures are recorded in the `errors` array and surfaced to the UI.
+  - HTTP 403 or daily limit halts immediately with a clear error.
+- **Stateless Cursor**:
+  - The HMAC cursor carries all seen place IDs (not capped at 500) and is compressed with `zlib.deflateSync` before base64url encoding.
+  - Zero reliance on server memory between steps.
+  - Caches for 10 minutes only when complete, uncapped, and error-free.
 
 ---
 
 ### 4. Pagination & Complete Excel Export (Section 4)
 - **Client-Side Pagination**:
   - Displays 20 places per page.
-  - Previous / Next buttons and page numbers with ellipsis.
-  - Summary label: `"Showing 21 to 40 of 361"`.
-  - Table scrolls smoothly to the top whenever the page changes.
-  - Sorting and filters apply to the entire dataset before paging; changing filters or sorting resets to page 1.
+  - Summary label: `"Showing 1 to 20 of 3183"`.
+  - Table scrolls smoothly to top on page navigation.
 - **Excel Export**:
-  - Exports **ALL** rows matching current filters (across every page).
-  - Includes: Name, Type, Address, Phone, Rating, Website, Website Status, Opening Hours, Map Link, Business Status, Place ID, Google Types, and Date Fetched.
+  - Exports **ALL** rows matching current filters across every page.
+  - Formats phone numbers without inventing digits.
 
 ---
 
-### 5. Table Layout That Fits the Screen (Section 5)
-- **Screens >= 1280 px**:
-  - `table-layout: fixed; width: 100%;` inside a container (`max-width: 1600px`).
-  - All 10 columns are fully visible with **zero horizontal scrolling**:
-    - **Name**: 16% (clamped to 2 lines)
-    - **Type**: 7%
-    - **Address**: 17% (2-line clamp with full tooltip and Details drawer access)
-    - **Phone**: 11% (formatted as `+91 XXXXX XXXXX` or `+91 80 XXXX XXXX`, `white-space: nowrap`, actionable `tel:` links)
-    - **Rating**: 7% (e.g. `4.2 (605)` on one line)
-    - **Website**: 12% (1-line ellipsis with hover tooltip)
-    - **Website Status**: 8%
-    - **Opening Hours**: 10% (`Today: 10 AM - 10 PM` with full 7-day schedule in tooltip)
-    - **Map**: 4% (compact icon button with tooltip)
-    - **Actions**: 8% (compact "Generate" button or disabled "Has website" button, plus Details `ℹ` and Refresh `↻` icons)
-- **Screens < 1100 px**:
-  - Switches automatically to a clean card layout per place with zero horizontal scrolling.
+### 5. Table Layout & Amber Warning Banners
+- **Amber Warning Banners**:
+  - When search hits the request limit (`capped: true`), displays: *"Search stopped at the request limit, results may be incomplete"*.
+  - When search errors occur, displays: *"Some searches failed, results may be incomplete"*.
+  - Final summary prominently displays: *"N places found, N Google requests used"*.
 
 ---
 
-### 6. Warnings, URL Shorteners & Details Drawer (Section 6)
-- **Focused Warning Icon**:
-  - **Never warns about missing website** (missing website is the intended target).
-  - Warns strictly for:
-    1. Missing phone number.
-    2. Invalid phone format (not standard 10-digit Indian number).
-    3. Missing opening hours.
-    4. Business marked `CLOSED_TEMPORARILY`.
-    5. Name contains phone number or promotional wording.
-    6. Address missing a 6-digit postal pincode.
-- **URL Shortener Resolution**:
-  - Server follows shorteners (`cutt.ly`, `bit.ly`, `tinyurl.com`, `rb.gy`, `t.co`, `goo.gl`, `linktr.ee`, etc.) up to 5 redirects with a 5-second timeout.
-  - If destination is social/listing (Instagram, Facebook, Zomato, Swiggy, JustDial), marks row as `"No own website"` and shows platform name.
-- **Details Drawer**:
-  - Shows Google's `primaryType` and all `types`.
-  - Includes an interactive **Reclassify** dropdown (Restaurant / Stay) that updates the row, the website generator, and Excel export.
-- **Review Window**:
-  - Shows `"No photos found on this place's Google pin"` only when Google returns zero photos.
-  - **"+ Add photo"** button is always accessible.
+### 6. Phone Formatting & WhatsApp Detection (Section 7)
+- **Zero Invention**: Never invents digits or area codes (e.g. 8-digit numbers like `12345678` are formatted as `+91 12345678`, never adding fake `80`).
+- **Google Grouping Preserved**:
+  - Indian mobile numbers: `+91 NNNNN NNNNN` (first digit 6, 7, 8, or 9; includes `80xxx` and `79xxx` mobiles).
+  - Landlines: `+91 ` + Google's own grouping with trunk `0` stripped (e.g. `080 2345 6789` -> `+91 80 2345 6789`, `0821 2345678` -> `+91 821 2345678`).
+- **WhatsApp**:
+  - Validated for Indian mobiles starting with 6, 7, 8, 9. Numbers beginning with 80 or 79 are fully valid mobiles for WhatsApp.
+  - Intern manual input accepted if 10 digits starting with 6–9.
+  - Landlines receive a Call button only.
 
 ---
 
@@ -128,20 +105,22 @@ Configure the following variables in your local `.env` and in your **Vercel Proj
 | Variable | Required? | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `GOOGLE_PLACES_API_KEY` | **Yes** | — | Google Places API (New) key with Text Search, Place Details, and Photos enabled. |
-| `TOMTOM_API_KEY` | Optional | — | TomTom Search API key for fallback search. |
-| `SEARCH_SECRET` | **Yes** | `location_finder_secret_key` | Secret key used to sign and verify HMAC cursors between stepped search calls. |
-| `SEARCH_REQUEST_CAP` | Optional | `300` | Maximum Google API requests permitted per search session. |
+| `SEARCH_SECRET` | **Yes** | *None (auto-generated with warning)* | Secret key used to sign HMAC cursors. **Must be explicitly set in Vercel** so multi-instance serverless steps share the identical key! |
+| `SEARCH_REQUEST_CAP` | Optional | `600` | Maximum Google API requests permitted per search session (default is 600). |
 | `DAILY_REQUEST_CAP` | Optional | `1500` | Daily request quota safety ceiling. |
+| `DEBUG_PLACE_NAME` | Optional | — | Place name substring to log diagnostics for (e.g. `Hanumanthu`), tracing which wording/tile found it or why it was dropped. |
+| `TOMTOM_API_KEY` | Optional | — | TomTom Search API key for fallback search. |
 | `BLOB_READ_WRITE_TOKEN` | Recommended (Vercel) | — | Token from Vercel Blob store for persistent owner photo uploads. |
 | `PORT` | Optional | `3000` | Local server port. |
 
 ### Example `.env` file:
 ```env
 GOOGLE_PLACES_API_KEY=AIzaSy...
-TOMTOM_API_KEY=your_tomtom_key_optional
 SEARCH_SECRET=my_ultra_secure_hmac_secret_2026
-SEARCH_REQUEST_CAP=300
+SEARCH_REQUEST_CAP=600
 DAILY_REQUEST_CAP=1500
+DEBUG_PLACE_NAME=Hanumanthu
+TOMTOM_API_KEY=your_tomtom_key_optional
 BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
 PORT=3000
 ```
@@ -153,23 +132,18 @@ PORT=3000
 1. **Push repository to GitHub**:
    ```bash
    git add .
-   git commit -m "Complete Location Finder v2 updates (Sections 1-8)"
+   git commit -m "Fix Google Places search coverage and accuracy bugs (Sections 1-8)"
    git push origin main
    ```
-2. **Connect to Vercel**:
-   - Import your GitHub repository in the Vercel Dashboard.
-   - Framework Preset: **Other** (Express / Node.js).
-3. **Add Environment Variables in Vercel**:
-   - Go to **Project Settings → Environment Variables**.
-   - Add:
-     - `GOOGLE_PLACES_API_KEY`
-     - `SEARCH_SECRET`
-     - `SEARCH_REQUEST_CAP` (e.g. `300`)
-     - `DAILY_REQUEST_CAP` (e.g. `1500`)
-     - `BLOB_READ_WRITE_TOKEN` (Create from Vercel Storage → Blob)
-     - `TOMTOM_API_KEY` (if used)
-4. **Deploy**:
-   - The stepped architecture (`/api/search/step`) ensures each step runs within 2–4 seconds, well under the Vercel Hobby 10s serverless timeout.
+2. **Set Environment Variables in Vercel**:
+   - Go to **Project Settings → Environment Variables**:
+     - `GOOGLE_PLACES_API_KEY` = your Google Places API key
+     - `SEARCH_SECRET` = a random 32+ char string (e.g. `locfinder_hmac_secret_2026_xyz`)
+     - `SEARCH_REQUEST_CAP` = `600`
+     - `DAILY_REQUEST_CAP` = `1500`
+     - `BLOB_READ_WRITE_TOKEN` = (from Vercel Storage → Blob)
+     - `TOMTOM_API_KEY` = (optional)
+     - `DEBUG_PLACE_NAME` = (optional, e.g. `Hanumanthu`)
 
 ---
 
@@ -177,12 +151,12 @@ PORT=3000
 
 Run tests locally:
 ```bash
-# Test all 27 alias pairs and ambiguous location resolution
+# 1. Offline phone formatting and WhatsApp test (zero Google requests)
+node test_phone_offline.js
+
+# 2. Mysuru verification search (validates splits, requests, Hanumanthu discovery, Excel export)
+node test_mysuru_both.js
+
+# 3. Test alias pairs and ambiguous location resolution
 node test_resolve_suite.js
-
-# Test stepped search, Mysore vs Mysuru parity, Excel export, and website previews
-node test_section7_flows.js
-
-# Test small town (Kumta) vs big city (Bengaluru) adaptive search
-node test_town_and_city.js
 ```
