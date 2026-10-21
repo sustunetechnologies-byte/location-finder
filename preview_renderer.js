@@ -812,24 +812,27 @@ function buildGalleryHtml(photos, safeName, isRestaurant) {
       </div>
       <div class="gallery-grid" id="gallery-container">
         ${photos.slice(0, 12).map((p, i) => {
+          const isOwner = !!(p.isOwnerProvided && p.url);
           const author = p.authorAttributions && p.authorAttributions[0] ? p.authorAttributions[0] : null;
-          const authorName = author?.displayName || 'Google Maps Contributor';
-          const authorUri = author?.uri || '';
+          const authorName = isOwner ? 'Owner-provided photo' : (author?.displayName || 'Google Maps Contributor');
+          const authorUri = isOwner ? '' : (author?.uri || '');
+          const thumbUrl = p.url || `/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=400`;
+          const fullUrl = p.url || `/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=1200`;
           return `
           <div class="gallery-thumb-wrap reveal" style="--reveal-delay:${i * 50}ms;" data-index="${i}">
             <img class="gallery-thumb"
-              src="/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=400"
+              src="${escapeHtml(thumbUrl)}"
               alt="${safeName} Photo ${i + 1}"
               loading="lazy"
-              data-full="/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=1200"
+              data-full="${escapeHtml(fullUrl)}"
               data-author-name="${escapeHtml(authorName)}"
               data-author-uri="${escapeHtml(authorUri)}"
               data-index="${i}"
               tabindex="0"
               role="button"
-              aria-label="View photo ${i + 1} by ${escapeHtml(authorName)}"
+              aria-label="View photo ${i + 1} (${escapeHtml(authorName)})"
               onerror="this.closest('.gallery-thumb-wrap').remove()">
-            ${!isRestaurant ? `
+            ${(!isRestaurant && !isOwner) ? `
               <div class="gallery-thumb-caption">
                 <span>📷 ${escapeHtml(authorName)}</span>
               </div>` : ''}
@@ -973,9 +976,11 @@ function buildRoomsSectionHtml(rooms, allPhotos, safeName) {
     // Optional photo
     let photoUrl = null;
     if (typeof room.photoIndex === 'number' && allPhotos && allPhotos[room.photoIndex]) {
-      photoUrl = `/api/photo?name=${encodeURIComponent(allPhotos[room.photoIndex].name)}&maxWidth=800`;
+      const p = allPhotos[room.photoIndex];
+      photoUrl = p.url || `/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=800`;
     } else if (allPhotos && allPhotos[idx % allPhotos.length]) {
-      photoUrl = `/api/photo?name=${encodeURIComponent(allPhotos[idx % allPhotos.length].name)}&maxWidth=800`;
+      const p = allPhotos[idx % allPhotos.length];
+      photoUrl = p.url || `/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=800`;
     }
 
     return `
@@ -1105,7 +1110,7 @@ function buildRestaurantMenuHtml(menu, menuPhotos, safeName) {
         <div class="menu-photos-grid">
           ${menuPhotos.map((p, i) => `
             <div class="menu-photo-thumb-wrap" onclick="openLb(${i})">
-              <img src="/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=800"
+              <img src="${escapeHtml(p.url || `/api/photo?name=${encodeURIComponent(p.name)}&maxWidth=800`)}"
                 alt="Menu Page ${i + 1}" class="menu-photo-thumb" loading="lazy">
               <span class="menu-photo-lbl">Menu Page ${i + 1}</span>
             </div>`).join('')}
@@ -1327,7 +1332,7 @@ function renderPreviewHtml(data, themeOverride) {
     const role = assignments[idx]?.role || (idx === 0 ? 'hero' : 'gallery');
     if (role === 'hero' && !heroPhoto) {
       heroPhoto = p;
-    } else if (role === 'menu') {
+    } else if (role === 'menu' || role === 'food') {
       menuPhotos.push(p);
     } else {
       galleryPhotos.push(p);
@@ -1375,7 +1380,7 @@ function renderPreviewHtml(data, themeOverride) {
   const enquireHtml = buildEnquireHtml(safeName, isStay, hasPhone, telUri, waLink, safeMapUrl);
 
   // Hero HTML builder
-  const heroPhotoUrl = heroPhoto ? `/api/photo?name=${encodeURIComponent(heroPhoto.name)}&maxWidth=1200` : '';
+  const heroPhotoUrl = heroPhoto ? (heroPhoto.url || `/api/photo?name=${encodeURIComponent(heroPhoto.name)}&maxWidth=1200`) : '';
   const metaHtml = (safeRating || safePriceLevel) ? `
     <div class="hero-meta">
       ${safeRating ? `<div class="hero-rating">★ ${safeRating}${safeReviewCount ? ` <span class="hero-reviews">(${safeReviewCount})</span>` : ''}</div>` : ''}
@@ -3160,7 +3165,9 @@ function renderPreviewHtml(data, themeOverride) {
       if (lbAttr) {
         var aName = el.dataset.authorName;
         var aUri = el.dataset.authorUri;
-        if (aName) {
+        if (aName === 'Owner-provided photo') {
+          lbAttr.textContent = 'Owner-provided photo';
+        } else if (aName) {
           if (aUri) {
             lbAttr.innerHTML = 'Photo by <a href="' + aUri + '" target="_blank" rel="noopener noreferrer">' + aName + ' ↗</a> (Google Maps Contributor)';
           } else {

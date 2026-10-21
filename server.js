@@ -13,20 +13,24 @@ const PORT = process.env.PORT || 3000;
 // ──────────────────────────────────────────────
 const GOOGLE_KEY = (process.env.GOOGLE_PLACES_API_KEY || '').trim().replace(/^["']|["']$/g, '');
 const TOMTOM_KEY = (process.env.TOMTOM_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+const VERCEL_BLOB_TOKEN = (process.env.BLOB_READ_WRITE_TOKEN || '').trim().replace(/^["']|["']$/g, '');
 
 console.log(`[Server] Google key loaded: ${GOOGLE_KEY ? 'yes' : 'no'}`);
 console.log(`[Server] TomTom key loaded: ${TOMTOM_KEY ? 'yes' : 'no'}`);
+console.log(`[Server] Vercel Blob configured: ${VERCEL_BLOB_TOKEN ? 'yes' : 'no'}`);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ──────────────────────────────────────────────
-// In-memory caches
+// In-memory caches & Upload Store (with 30-day expiry)
 // ──────────────────────────────────────────────
 const searchCache = new Map();   // search results
 const previewStore = new Map();  // token → enriched data
+const uploadStore = new Map();   // storageId → { buffer, contentType, uploadedAt, filename }
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ──────────────────────────────────────────────
 // Social / listing platform detection
@@ -235,34 +239,233 @@ const GOOGLE_SEARCH_FIELD_MASK = [
   'places.regularOpeningHours',
   'places.googleMapsUri',
   'places.types',
+  'places.primaryType',
+  'places.businessStatus',
+  'nextPageToken'
+].join(',');
+
+const GOOGLE_NEARBY_FIELD_MASK = [
+  'places.id',
+  'places.displayName',
+  'places.formattedAddress',
+  'places.location',
+  'places.nationalPhoneNumber',
+  'places.internationalPhoneNumber',
+  'places.websiteUri',
+  'places.rating',
+  'places.userRatingCount',
+  'places.regularOpeningHours',
+  'places.googleMapsUri',
+  'places.types',
+  'places.primaryType',
   'places.businessStatus'
 ].join(',');
 
-async function googleTextSearch(queryText) {
+// Daily counter for Google Places requests (Section 2 & 4)
+let dailyRequestCount = 0;
+let dailyCounterDate = new Date().toISOString().split('T')[0];
+
+function checkDailyLimit(requestsNeeded = 1) {
+  const today = new Date().toISOString().split('T')[0];
+  if (today !== dailyCounterDate) {
+    dailyCounterDate = today;
+    dailyRequestCount = 0;
+  }
+  if (dailyRequestCount + requestsNeeded > 400) {
+    throw {
+      status: 429,
+      code: 'DAILY_LIMIT_EXCEEDED',
+      message: `Daily limit of 400 Google Places API requests reached (${dailyRequestCount}/400 used today). Usage resets tomorrow.`
+    };
+  }
+}
+
+function incrementDailyCounter(count = 1) {
+  dailyRequestCount += count;
+}
+
+const RESTAURANT_WORDINGS = [
+  'restaurant', 'cafe', 'bakery', 'hotel restaurant', 'dhaba',
+  'fast food', 'juice and snacks', 'veg restaurant', 'non veg restaurant', 'bar and restaurant',
+  'family restaurant', 'mess', 'tiffin', 'biryani', 'meals', 'military hotel', 'darshini', 'hotel'
+];
+
+const STAY_WORDINGS = [
+  'hotel', 'lodge', 'guest house', 'homestay', 'resort',
+  'PG hostel', 'farm stay', 'rooms for rent', 'budget hotel',
+  'dormitory', 'service apartment'
+];
+
+const RESTAURANT_NEARBY_TYPES = [
+  'restaurant', 'cafe', 'bakery', 'meal_takeaway', 'fast_food_restaurant'
+];
+
+const STAY_NEARBY_TYPES = [
+  'lodging', 'hotel', 'guest_house', 'bed_and_breakfast', 'hostel', 'resort_hotel'
+];
+
+async function runInBatches(tasks, batchSize = 5, delayMs = 150) {
+  const results = [];
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fn => fn()));
+    results.push(...batchResults);
+    if (i + batchSize < tasks.length && delayMs > 0) {
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return results;
+}
+
+async function googleTextSearch(queryText, restriction = null, maxPages = 3) {
   if (!GOOGLE_KEY) throw { status: 503, code: 'NO_GOOGLE_KEY', message: 'Google Places API key is not configured.' };
 
   const url = 'https://places.googleapis.com/v1/places:searchText';
-  const body = JSON.stringify({ textQuery: queryText, pageSize: 20 });
+  let allPlaces = [];
+  let nextPageToken = null;
+  let pagesFetched = 0;
+  let closedCount = 0;
+
+  for (let page = 0; page < maxPages; page++) {
+    try {
+      checkDailyLimit(1);
+    } catch (limErr) {
+      if (allPlaces.length > 0) break;
+      throw limErr;
+    }
+
+    const bodyObj = { textQuery: queryText, pageSize: 20 };
+    if (nextPageToken) {
+      bodyObj.pageToken = nextPageToken;
+    }
+    if (restriction && restriction.rectangle) {
+      bodyObj.locationRestriction = restriction;
+    } else if (restriction && restriction.circle) {
+      bodyObj.locationBias = restriction;
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_KEY,
+        'X-Goog-FieldMask': GOOGLE_SEARCH_FIELD_MASK
+      },
+      body: JSON.stringify(bodyObj)
+    });
+
+    incrementDailyCounter(1);
+    pagesFetched++;
+
+    if (res.status === 403) throw { status: 403, code: 'GOOGLE_403', message: 'Google Places API key is invalid, not enabled, or restricted (403). Check your API Console.' };
+    if (res.status === 429) throw { status: 429, code: 'GOOGLE_429', message: 'Google Places API daily quota reached (429). Usage resets the next day.' };
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw { status: res.status, message: `Google Places search failed (${res.status}): ${txt.slice(0, 200)}` };
+    }
+
+    const data = await res.json();
+    // Exclude ONLY CLOSED_PERMANENTLY; keep count of permanently closed
+    const places = (data.places || []).filter(p => {
+      if (p.businessStatus === 'CLOSED_PERMANENTLY') {
+        closedCount++;
+        return false;
+      }
+      return true;
+    });
+    allPlaces.push(...places);
+
+    nextPageToken = data.nextPageToken || null;
+    if (!nextPageToken) break;
+  }
+
+  return { places: allPlaces, pagesFetched, closedCount };
+}
+
+async function googleNearbySearch(center, radiusMeters, includedTypes, rankPreference = 'POPULARITY') {
+  if (!GOOGLE_KEY) throw { status: 503, code: 'NO_GOOGLE_KEY', message: 'Google Places API key is not configured.' };
+
+  checkDailyLimit(1);
+
+  const url = 'https://places.googleapis.com/v1/places:searchNearby';
+  const body = JSON.stringify({
+    includedTypes,
+    maxResultCount: 20,
+    rankPreference,
+    locationRestriction: {
+      circle: {
+        center: { latitude: center.lat, longitude: center.lon },
+        radius: radiusMeters
+      }
+    }
+  });
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': GOOGLE_KEY,
-      'X-Goog-FieldMask': GOOGLE_SEARCH_FIELD_MASK
+      'X-Goog-FieldMask': GOOGLE_NEARBY_FIELD_MASK
     },
     body
   });
+
+  incrementDailyCounter(1);
 
   if (res.status === 403) throw { status: 403, code: 'GOOGLE_403', message: 'Google Places API key is invalid, not enabled, or restricted (403). Check your API Console.' };
   if (res.status === 429) throw { status: 429, code: 'GOOGLE_429', message: 'Google Places API daily quota reached (429). Usage resets the next day.' };
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
-    throw { status: res.status, message: `Google Places search failed (${res.status}): ${txt.slice(0, 200)}` };
+    throw { status: res.status, message: `Google Places Nearby search failed (${res.status}): ${txt.slice(0, 200)}` };
   }
 
   const data = await res.json();
-  return (data.places || []).filter(p => !p.businessStatus || p.businessStatus === 'OPERATIONAL');
+  let closedCount = 0;
+  const places = (data.places || []).filter(p => {
+    if (p.businessStatus === 'CLOSED_PERMANENTLY') {
+      closedCount++;
+      return false;
+    }
+    return true;
+  });
+  return { places, closedCount };
+}
+
+async function resolveLocationCenter(locationStr) {
+  if (TOMTOM_KEY) {
+    try {
+      const pos = await geocodeLocationTomTom(locationStr);
+      if (pos && pos.lat && pos.lon) return { lat: pos.lat, lon: pos.lon };
+    } catch {}
+  }
+  if (GOOGLE_KEY) {
+    try {
+      checkDailyLimit(1);
+      const url = 'https://places.googleapis.com/v1/places:searchText';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_KEY,
+          'X-Goog-FieldMask': 'places.location,places.viewport'
+        },
+        body: JSON.stringify({ textQuery: locationStr, pageSize: 1 })
+      });
+      incrementDailyCounter(1);
+      if (res.ok) {
+        const data = await res.json();
+        const first = data.places?.[0];
+        if (first?.location) {
+          return {
+            lat: first.location.latitude,
+            lon: first.location.longitude,
+            viewport: first.viewport || null
+          };
+        }
+      }
+    } catch {}
+  }
+  return null;
 }
 
 // ──────────────────────────────────────────────
@@ -272,7 +475,7 @@ const GOOGLE_DETAIL_FIELDS_FULL = [
   'id', 'displayName', 'formattedAddress', 'location', 'googleMapsUri',
   'nationalPhoneNumber', 'internationalPhoneNumber', 'websiteUri',
   'rating', 'userRatingCount', 'priceLevel', 'priceRange',
-  'regularOpeningHours', 'editorialSummary',
+  'regularOpeningHours', 'editorialSummary', 'businessStatus', 'types',
   'servesBrunch', 'servesBreakfast', 'servesLunch', 'servesDinner',
   'servesVegetarianFood', 'dineIn', 'takeout', 'delivery',
   'reservable', 'outdoorSeating', 'goodForGroups', 'goodForChildren',
@@ -328,12 +531,21 @@ async function googlePlaceDetailsWithRetry(placeId) {
 function mapGooglePlace(gp, computedType) {
   const name = gp.displayName?.text || 'Unknown Place';
   const address = gp.formattedAddress || 'Not available';
-  const phone = gp.nationalPhoneNumber || gp.internationalPhoneNumber || 'Not available';
+  const rawPhone = gp.nationalPhoneNumber || gp.internationalPhoneNumber || 'Not available';
   const rawWebsite = gp.websiteUri ? sanitizeUrl(gp.websiteUri) : null;
   const openingHours = formatOpeningHours(gp.regularOpeningHours);
   const mapLink = gp.googleMapsUri || (gp.location ? `https://www.google.com/maps?q=${gp.location.latitude},${gp.location.longitude}` : 'Not available');
   const rating = gp.rating ? String(gp.rating) : 'Not available';
   const reviewCount = gp.userRatingCount ? String(gp.userRatingCount) : 'Not available';
+
+  // Format phone (+91 for Indian numbers)
+  let phone = rawPhone;
+  const digits = cleanPhoneDigits(rawPhone);
+  if (digits && digits.length === 10) {
+    phone = `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
+  } else if (digits && digits.length >= 7 && !phone.startsWith('+91')) {
+    phone = `+91 ${digits}`;
+  }
 
   // Determine website display and social platform
   let websiteDisplay = rawWebsite || 'Not available';
@@ -345,12 +557,33 @@ function mapGooglePlace(gp, computedType) {
     }
   }
 
-  // Determine type from Google types array
+  // Determine type from Google primaryType and types array (never from words in the name)
   let type = computedType;
   if (!type) {
-    const types = gp.types || [];
-    const stayTypes = ['lodging', 'hotel', 'motel', 'hostel', 'guest_house', 'bed_and_breakfast', 'resort'];
-    type = types.some(t => stayTypes.includes(t)) ? 'Stay' : 'Restaurant';
+    const RESTAURANT_TYPES = new Set([
+      'restaurant', 'food', 'cafe', 'bakery', 'meal_takeaway', 'meal_delivery',
+      'fast_food_restaurant', 'bar', 'pub', 'bistro', 'diner', 'ice_cream_shop',
+      'coffee_shop', 'tea_house', 'south_indian_restaurant', 'indian_restaurant',
+      'chicken_restaurant', 'vegetarian_restaurant'
+    ]);
+    const STAY_TYPES = new Set([
+      'lodging', 'hotel', 'motel', 'hostel', 'guest_house', 'bed_and_breakfast',
+      'resort_hotel', 'extended_stay_hotel', 'farmstay', 'campground'
+    ]);
+
+    const pType = (gp.primaryType || '').toLowerCase();
+    if (RESTAURANT_TYPES.has(pType)) {
+      type = 'Restaurant';
+    } else if (STAY_TYPES.has(pType)) {
+      type = 'Stay';
+    } else {
+      const types = (gp.types || []).map(t => t.toLowerCase());
+      const hasRest = types.some(t => RESTAURANT_TYPES.has(t));
+      const hasStay = types.some(t => STAY_TYPES.has(t));
+      if (hasRest) type = 'Restaurant';
+      else if (hasStay) type = 'Stay';
+      else type = 'Restaurant';
+    }
   }
 
   return {
@@ -361,6 +594,7 @@ function mapGooglePlace(gp, computedType) {
     type,
     address,
     phone,
+    rawPhone,
     website: websiteDisplay,
     websiteUri: rawWebsite,
     socialPlatform,
@@ -369,7 +603,10 @@ function mapGooglePlace(gp, computedType) {
     rating,
     reviewCount,
     coordinates: gp.location ? { lat: gp.location.latitude, lon: gp.location.longitude } : null,
-    businessStatus: gp.businessStatus || 'OPERATIONAL'
+    businessStatus: gp.businessStatus || 'OPERATIONAL',
+    types: gp.types || [],
+    primaryType: gp.primaryType || null,
+    fetchedAt: new Date().toISOString()
   };
 }
 
@@ -427,6 +664,7 @@ function mapTomTomPlace(item) {
     type,
     address: addr.freeformAddress ? addr.freeformAddress.trim() : 'Not available',
     phone,
+    rawPhone: phone,
     website: websiteDisplay,
     websiteUri: rawUrl,
     socialPlatform,
@@ -435,7 +673,9 @@ function mapTomTomPlace(item) {
     rating: 'Not available',
     reviewCount: 'Not available',
     coordinates: pos.lat ? { lat: pos.lat, lon: pos.lon } : null,
-    businessStatus: 'OPERATIONAL'
+    businessStatus: 'OPERATIONAL',
+    types: poi.categorySet ? poi.categorySet.map(c => c.name || String(c.id)) : [],
+    fetchedAt: new Date().toISOString()
   };
 }
 
@@ -479,38 +719,172 @@ async function handleSearch(req, res) {
 
     let places = [];
     let usedSource = normSource;
+    let coverageReport = null;
 
     // ── Google Places path ──
     if (normSource === 'google') {
       try {
-        let googleResults = [];
+        const area = (req.body?.area || req.query?.area || 'small').toLowerCase();
+        let radiusMeters = 3000;
 
-        if (normCategory === 'restaurants' || normCategory === 'restaurant') {
-          const r = await googleTextSearch(`restaurants in ${trimmedLoc}`);
-          googleResults = r.map(gp => mapGooglePlace(gp, 'Restaurant'));
-        } else if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels') {
-          const r = await googleTextSearch(`hotels, homestays, guest houses and PGs in ${trimmedLoc}`);
-          googleResults = r.map(gp => mapGooglePlace(gp, 'Stay'));
-        } else {
-          const [restRaw, stayRaw] = await Promise.all([
-            googleTextSearch(`restaurants in ${trimmedLoc}`),
-            googleTextSearch(`hotels, homestays, guest houses and PGs in ${trimmedLoc}`)
-          ]);
-          const restPlaces = restRaw.map(gp => mapGooglePlace(gp, 'Restaurant'));
-          const stayPlaces = stayRaw.map(gp => mapGooglePlace(gp, 'Stay'));
-          googleResults = [...restPlaces, ...stayPlaces];
+        // Resolve location center coordinates
+        const center = await resolveLocationCenter(trimmedLoc);
+
+        // Grid cells for multi-cell search
+        let gridCells = center ? [center] : [];
+        if (center) {
+          if (area === 'medium') {
+            radiusMeters = 6000;
+            const offset = 0.025;
+            gridCells = [
+              { lat: center.lat - offset, lon: center.lon - offset },
+              { lat: center.lat - offset, lon: center.lon + offset },
+              { lat: center.lat + offset, lon: center.lon - offset },
+              { lat: center.lat + offset, lon: center.lon + offset }
+            ];
+          } else if (area === 'large') {
+            radiusMeters = 12000;
+            gridCells = [];
+            [-0.05, 0, 0.05].forEach(dLat => {
+              [-0.05, 0, 0.05].forEach(dLon => {
+                gridCells.push({ lat: center.lat + dLat, lon: center.lon + dLon });
+              });
+            });
+          } else if (area === 'city') {
+            radiusMeters = 16000;
+            gridCells = [];
+            [-0.075, -0.025, 0.025, 0.075].forEach(dLat => {
+              [-0.075, -0.025, 0.025, 0.075].forEach(dLon => {
+                gridCells.push({ lat: center.lat + dLat, lon: center.lon + dLon });
+              });
+            });
+          }
         }
 
-        // Deduplicate by placeId
-        const seen = new Set();
-        places = googleResults.filter(p => {
-          if (!p.placeId) return true;
-          if (seen.has(p.placeId)) return false;
-          seen.add(p.placeId);
-          return true;
+        // Build list of queries
+        const queries = [];
+        if (normCategory === 'restaurants' || normCategory === 'restaurant') {
+          RESTAURANT_WORDINGS.forEach(w => queries.push({ type: 'Restaurant', wording: w, query: `${w} in ${trimmedLoc}` }));
+        } else if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels') {
+          STAY_WORDINGS.forEach(w => queries.push({ type: 'Stay', wording: w, query: `${w} in ${trimmedLoc}` }));
+        } else {
+          RESTAURANT_WORDINGS.forEach(w => queries.push({ type: 'Restaurant', wording: w, query: `${w} in ${trimmedLoc}` }));
+          STAY_WORDINGS.forEach(w => queries.push({ type: 'Stay', wording: w, query: `${w} in ${trimmedLoc}` }));
+        }
+
+        // Nearby searches per grid cell
+        const nearbyTasks = [];
+        if (gridCells.length > 0) {
+          const cellsToSearch = gridCells.slice(0, 16);
+          const cellRadius = area === 'small' ? 3000 : (area === 'medium' ? 3000 : 4000);
+          for (let i = 0; i < cellsToSearch.length; i++) {
+            const cell = cellsToSearch[i];
+            const cellTag = cellsToSearch.length > 1 ? ` cell ${i + 1}/${cellsToSearch.length}` : '';
+            if (normCategory === 'restaurants' || normCategory === 'restaurant' || normCategory === 'both') {
+              nearbyTasks.push({ cell, radius: cellRadius, type: 'Restaurant', rank: 'DISTANCE', types: RESTAURANT_NEARBY_TYPES, label: `Nearby restaurants (Distance${cellTag})` });
+              if (cellsToSearch.length <= 4) {
+                nearbyTasks.push({ cell, radius: cellRadius, type: 'Restaurant', rank: 'POPULARITY', types: RESTAURANT_NEARBY_TYPES, label: `Nearby restaurants (Popularity${cellTag})` });
+              }
+            }
+            if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels' || normCategory === 'both') {
+              nearbyTasks.push({ cell, radius: cellRadius, type: 'Stay', rank: 'DISTANCE', types: STAY_NEARBY_TYPES, label: `Nearby stays (Distance${cellTag})` });
+              if (cellsToSearch.length <= 4) {
+                nearbyTasks.push({ cell, radius: cellRadius, type: 'Stay', rank: 'POPULARITY', types: STAY_NEARBY_TYPES, label: `Nearby stays (Popularity${cellTag})` });
+              }
+            }
+          }
+        }
+
+        // Cost guard check & 150 hard stop (Section 4)
+        const pagesPerQuery = gridCells.length > 4 ? 1 : (gridCells.length > 1 ? 2 : 3);
+        const maxEstimatedRequests = 1 + (queries.length * pagesPerQuery) + nearbyTasks.length;
+        if (maxEstimatedRequests > 150) {
+          return res.status(400).json({
+            error: `Hard-stop: This search may use up to ${maxEstimatedRequests} Google requests, which exceeds the limit of 150 requests per search. Please select a specific category or reduce search area.`
+          });
+        }
+        checkDailyLimit(maxEstimatedRequests);
+
+        // Location restriction rectangle covering entire search area
+        let locationRestriction = null;
+        if (center) {
+          const latDelta = radiusMeters / 111320;
+          const lonDelta = radiusMeters / (111320 * Math.cos(center.lat * Math.PI / 180));
+          locationRestriction = {
+            rectangle: {
+              low: { latitude: center.lat - latDelta, longitude: center.lon - lonDelta },
+              high: { latitude: center.lat + latDelta, longitude: center.lon + lonDelta }
+            }
+          };
+        }
+
+        const seenPlaceIds = new Set();
+        const mergedPlaces = [];
+        const queryReports = [];
+        let totalPermanentlyClosed = 0;
+
+        function recordPlaces(queryLabel, rawGooglePlaces, placeType, closedCount = 0) {
+          totalPermanentlyClosed += closedCount;
+          let newCount = 0;
+          for (const gp of rawGooglePlaces) {
+            const pId = gp.id;
+            if (pId) {
+              if (seenPlaceIds.has(pId)) continue;
+              seenPlaceIds.add(pId);
+            }
+            newCount++;
+            mergedPlaces.push(mapGooglePlace(gp, placeType));
+          }
+          queryReports.push({
+            query: queryLabel,
+            found: rawGooglePlaces.length,
+            newCount
+          });
+        }
+
+        // Execute text search queries in batches of 5 with 150ms delay
+        const textTasks = queries.map(q => async () => {
+          try {
+            const res = await googleTextSearch(q.query, locationRestriction, pagesPerQuery);
+            return { q, res: res.places, closedCount: res.closedCount };
+          } catch (err) {
+            console.warn(`[Text Search Warning] "${q.query}":`, err.message);
+            return { q, res: [], closedCount: 0 };
+          }
         });
 
+        const textResults = await runInBatches(textTasks, 5, 150);
+        for (const item of textResults) {
+          recordPlaces(item.q.query, item.res, item.q.type, item.closedCount);
+        }
+
+        // Execute nearby searches across grid cells
+        if (nearbyTasks.length > 0) {
+          const nbTasks = nearbyTasks.map(nb => async () => {
+            try {
+              const res = await googleNearbySearch(nb.cell, nb.radius, nb.types, nb.rank);
+              return { nb, res: res.places, closedCount: res.closedCount };
+            } catch (err) {
+              console.warn(`[Nearby Search Warning] "${nb.label}":`, err.message);
+              return { nb, res: [], closedCount: 0 };
+            }
+          });
+          const nbResults = await runInBatches(nbTasks, 5, 150);
+          for (const item of nbResults) {
+            recordPlaces(item.nb.label, item.res, item.nb.type, item.closedCount);
+          }
+        }
+
+        places = mergedPlaces;
         usedSource = 'google';
+        coverageReport = {
+          total: places.length,
+          queryCount: queryReports.length,
+          hiddenClosedCount: totalPermanentlyClosed,
+          area,
+          gridCellCount: gridCells.length,
+          queries: queryReports
+        };
       } catch (gErr) {
         // If Google fails with key/quota error, surface it clearly and suggest TomTom
         console.error('[Google Search Error]', gErr.code || gErr.status, gErr.message);
@@ -562,6 +936,11 @@ async function handleSearch(req, res) {
 
         places = deduped.map(mapTomTomPlace);
         usedSource = 'tomtom';
+        coverageReport = {
+          total: places.length,
+          queryCount: 1,
+          queries: [{ query: `TomTom POI Search in ${trimmedLoc}`, found: places.length, newCount: places.length }]
+        };
       } catch (ttErr) {
         console.error('[TomTom Search Error]', ttErr.message);
         return res.status(ttErr.status || 500).json({ error: ttErr.message });
@@ -575,10 +954,20 @@ async function handleSearch(req, res) {
     const phoneCount = checkedPlaces.filter(p => p.phone !== 'Not available').length;
     const websiteCount = checkedPlaces.filter(p => p.website !== 'Not available' && !p.socialPlatform).length;
 
-    searchCache.set(cacheKey, { timestamp: Date.now(), data: checkedPlaces });
+    searchCache.set(cacheKey, { timestamp: Date.now(), data: checkedPlaces, coverageReport });
     console.log(`[Search] "${trimmedLoc}" | ${normCategory} | ${usedSource} | ${checkedPlaces.length} results | ${phoneCount} phone | ${websiteCount} website`);
 
-    return res.json({ cached: false, location: trimmedLoc, category: normCategory, source: usedSource, total: checkedPlaces.length, phoneCount, websiteCount, results: checkedPlaces });
+    return res.json({
+      cached: false,
+      location: trimmedLoc,
+      category: normCategory,
+      source: usedSource,
+      total: checkedPlaces.length,
+      phoneCount,
+      websiteCount,
+      coverageReport,
+      results: checkedPlaces
+    });
 
   } catch (err) {
     console.error('[Search Error]', err.message || err);
@@ -588,6 +977,29 @@ async function handleSearch(req, res) {
 
 app.get('/api/search', handleSearch);
 app.post('/api/search', handleSearch);
+
+// ──────────────────────────────────────────────
+// POST /api/search-single — Add missing place search (Section 2)
+// ──────────────────────────────────────────────
+app.post('/api/search-single', async (req, res) => {
+  try {
+    const { name, location } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Business name is required.' });
+    }
+    const loc = (location || '').trim();
+    const query = loc ? `${name.trim()} in ${loc}` : name.trim();
+
+    checkDailyLimit(1);
+    const searchRes = await googleTextSearch(query, null, 1);
+    const places = (searchRes.places || []).map(gp => mapGooglePlace(gp));
+
+    return res.json({ places });
+  } catch (err) {
+    console.error('[Search Single Error]', err.message || err);
+    return res.status(err.status || 500).json({ error: err.message || 'Search failed.' });
+  }
+});
 
 // ──────────────────────────────────────────────
 // POST /api/enrich  — Fetch full Place Details
@@ -618,6 +1030,8 @@ app.post('/api/enrich', async (req, res) => {
       priceLevel: formatPriceLevel(details.priceLevel),
       editorialSummary: details.editorialSummary?.text || '',
       openingHours: formatOpeningHours(details.regularOpeningHours),
+      businessStatus: details.businessStatus || 'OPERATIONAL',
+      types: details.types || [],
       features: {
         servesBreakfast: details.servesBreakfast || false,
         servesLunch: details.servesLunch || false,
@@ -636,7 +1050,7 @@ app.post('/api/enrich', async (req, res) => {
         accessibilityOptions: details.accessibilityOptions || {}
       },
       // Photo resource names (not full URLs — proxy fetches them)
-      photos: details._photosUnavailable ? [] : (details.photos || []).slice(0, 10).map(p => ({
+      photos: details._photosUnavailable ? [] : (details.photos || []).slice(0, 12).map(p => ({
         name: p.name,
         widthPx: p.widthPx,
         heightPx: p.heightPx,
@@ -696,6 +1110,124 @@ app.get('/api/photo', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────
+// POST /api/upload-photo — Upload owner-provided photos (Section 3)
+// Rules: JPEG/PNG/WebP, max 5MB, random unguessable ID, Vercel Blob or local store
+// ──────────────────────────────────────────────
+app.post('/api/upload-photo', async (req, res) => {
+  try {
+    const { filename, contentType, base64Data, permissionConfirmed } = req.body || {};
+    if (!permissionConfirmed) {
+      return res.status(400).json({ error: 'Permission confirmation is required.' });
+    }
+    if (!base64Data || typeof base64Data !== 'string') {
+      return res.status(400).json({ error: 'Image data is required.' });
+    }
+
+    const validMimes = ['image/jpeg', 'image/png', 'image/webp'];
+    const mime = (contentType || 'image/jpeg').toLowerCase();
+    if (!validMimes.includes(mime)) {
+      return res.status(400).json({ error: 'Only JPEG, PNG, and WebP images are allowed.' });
+    }
+
+    // Clean base64 data prefix if present
+    const cleanBase64 = base64Data.replace(/^data:image\/[a-z]+;base64,/, '');
+    const buffer = Buffer.from(cleanBase64, 'base64');
+
+    if (buffer.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Image exceeds maximum size limit of 5 MB.' });
+    }
+
+    // Random unguessable ID
+    const storageId = crypto.randomBytes(16).toString('hex');
+    const safeName = (filename || 'photo.jpg').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const blobFilename = `uploads/${storageId}_${safeName}`;
+
+    // If Vercel Blob is configured
+    if (VERCEL_BLOB_TOKEN) {
+      try {
+        const { put } = require('@vercel/blob');
+        const blob = await put(blobFilename, buffer, {
+          access: 'public',
+          token: VERCEL_BLOB_TOKEN,
+          contentType: mime
+        });
+        return res.json({
+          success: true,
+          url: blob.url,
+          storageId,
+          name: blobFilename,
+          storageType: 'vercel-blob'
+        });
+      } catch (blobErr) {
+        console.warn('[Vercel Blob Upload Warning, falling back to local]', blobErr.message);
+      }
+    }
+
+    // In-memory / local fallback store with 30-day auto-expiry
+    uploadStore.set(storageId, {
+      buffer,
+      contentType: mime,
+      filename: safeName,
+      uploadedAt: Date.now()
+    });
+
+    // Prune entries older than 30 days
+    const now = Date.now();
+    for (const [id, item] of uploadStore.entries()) {
+      if (now - item.uploadedAt > THIRTY_DAYS_MS) {
+        uploadStore.delete(id);
+      }
+    }
+
+    const localUrl = `/api/uploaded-photo/${storageId}`;
+    return res.json({
+      success: true,
+      url: localUrl,
+      storageId,
+      name: safeName,
+      storageType: 'local'
+    });
+  } catch (err) {
+    console.error('[Upload Photo Error]', err);
+    return res.status(500).json({ error: 'Failed to upload photo.' });
+  }
+});
+
+// GET /api/uploaded-photo/:id
+app.get('/api/uploaded-photo/:id', (req, res) => {
+  const { id } = req.params;
+  const item = uploadStore.get(id);
+  if (!item) {
+    return res.status(404).json({ error: 'Photo not found or expired.' });
+  }
+  res.setHeader('Content-Type', item.contentType || 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.send(item.buffer);
+});
+
+// POST /api/delete-photo
+app.post('/api/delete-photo', async (req, res) => {
+  try {
+    const { storageId, url } = req.body || {};
+    if (storageId && uploadStore.has(storageId)) {
+      uploadStore.delete(storageId);
+    }
+    if (url && VERCEL_BLOB_TOKEN && url.includes('.public.blob.vercel-storage.com')) {
+      try {
+        const { del } = require('@vercel/blob');
+        await del(url, { token: VERCEL_BLOB_TOKEN });
+      } catch (err) {
+        console.warn('[Vercel Blob Delete Warning]', err.message);
+      }
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[Delete Photo Error]', err);
+    return res.status(500).json({ error: 'Failed to delete photo.' });
+  }
+});
+
+// ──────────────────────────────────────────────
 // Design System & Preview Renderer Module
 // ──────────────────────────────────────────────
 const {
@@ -722,7 +1254,8 @@ app.post('/api/generate-site', (req, res) => {
       name, type, address, phone, whatsappNumber, openingHours,
       coordinates, mapLink, enriched, menuItems, roomTypes,
       verifications, placeId, design,
-      photoAssignments, rooms, menu, optionalFields
+      photoAssignments, rooms, menu, optionalFields,
+      shortDescription, photos
     } = req.body || {};
 
     if (!name || typeof name !== 'string' || !name.trim()) {
@@ -731,6 +1264,10 @@ app.post('/api/generate-site', (req, res) => {
 
     const designChoice = (design || 'auto').trim();
     const resolvedPlaceId = placeId || enriched?.id || null;
+
+    const candidatePhotos = (Array.isArray(photos) && photos.length > 0)
+      ? photos
+      : (Array.isArray(enriched?.photos) ? enriched.photos : []);
 
     // Build payload — all values HTML-escaped at render time
     const payload = {
@@ -744,21 +1281,32 @@ app.post('/api/generate-site', (req, res) => {
       mapLink: mapLink && mapLink !== 'Not available' ? mapLink.trim().slice(0, 500) : null,
       placeId: resolvedPlaceId,
       design: designChoice,
-      // Enriched data from Google
+      // Enriched data from Google or editable field
       rating: enriched?.rating || null,
       reviewCount: enriched?.reviewCount || null,
       priceLevel: enriched?.priceLevel || null,
-      editorialSummary: enriched?.editorialSummary ? String(enriched.editorialSummary).slice(0, 400) : null,
+      editorialSummary: (shortDescription || enriched?.editorialSummary) ? String(shortDescription || enriched.editorialSummary).slice(0, 400) : null,
       features: enriched?.features || {},
-      photos: Array.isArray(enriched?.photos) ? enriched.photos.slice(0, 10).map(p => ({
-        name: p.name,
-        widthPx: p.widthPx,
-        heightPx: p.heightPx,
-        authorAttributions: (p.authorAttributions || []).map(a => ({
-          displayName: (a.displayName || 'Google Maps Contributor').slice(0, 60),
-          uri: (a.uri || '').slice(0, 150)
-        }))
-      })) : [],
+      photos: candidatePhotos.slice(0, 12).map(p => {
+        if (p.isOwnerProvided && p.url) {
+          return {
+            url: p.url,
+            isOwnerProvided: true,
+            widthPx: p.widthPx || 1600,
+            heightPx: p.heightPx || 1200,
+            authorAttributions: []
+          };
+        }
+        return {
+          name: p.name,
+          widthPx: p.widthPx,
+          heightPx: p.heightPx,
+          authorAttributions: (p.authorAttributions || []).map(a => ({
+            displayName: (a.displayName || 'Google Maps Contributor').slice(0, 60),
+            uri: (a.uri || '').slice(0, 150)
+          }))
+        };
+      }),
       reviews: Array.isArray(enriched?.reviews) ? enriched.reviews.slice(0, 5).map(r => ({
         authorName: (r.authorName || 'Guest').slice(0, 60),
         rating: r.rating || null,
@@ -826,7 +1374,7 @@ app.post('/api/generate-site', (req, res) => {
 });
 
 // ──────────────────────────────────────────────
-// Excel Export (now includes Rating column)
+// Excel Export (now includes Rating, Business Status, Place ID, Types, Fetched At)
 // ──────────────────────────────────────────────
 app.post('/api/export', async (req, res) => {
   try {
@@ -848,7 +1396,11 @@ app.post('/api/export', async (req, res) => {
       { header: 'Website', key: 'website', width: 35 },
       { header: 'Website Status', key: 'websiteStatus', width: 20 },
       { header: 'Opening Hours', key: 'openingHours', width: 25 },
-      { header: 'Map Link', key: 'mapLink', width: 35 }
+      { header: 'Map Link', key: 'mapLink', width: 35 },
+      { header: 'Business Status', key: 'businessStatus', width: 18 },
+      { header: 'Place ID', key: 'placeId', width: 30 },
+      { header: 'Google Types', key: 'types', width: 30 },
+      { header: 'Data Fetched', key: 'fetchedAt', width: 22 }
     ];
 
     const headerRow = worksheet.getRow(1);
@@ -869,7 +1421,11 @@ app.post('/api/export', async (req, res) => {
         website: row.website || 'Not available',
         websiteStatus: row.websiteStatus || 'Not listed',
         openingHours: row.openingHours || 'Not available',
-        mapLink: row.mapLink || 'Not available'
+        mapLink: row.mapLink || 'Not available',
+        businessStatus: row.businessStatus || 'Not available',
+        placeId: row.placeId || 'Not available',
+        types: Array.isArray(row.types) ? row.types.join(', ') : (row.types || 'Not available'),
+        fetchedAt: row.fetchedAt || 'Not available'
       });
 
       addedRow.height = 22;
@@ -912,7 +1468,7 @@ app.post('/api/export', async (req, res) => {
       }
     });
 
-    worksheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 9 } };
+    worksheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 13 } };
 
     worksheet.columns.forEach((col) => {
       let maxLen = col.header ? col.header.length : 10;

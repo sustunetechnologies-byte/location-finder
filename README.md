@@ -1,141 +1,148 @@
 # Location Finder & Hospitality Website Preview Generator
 
-A full-stack Node.js + Express web application that discovers nearby hospitality businesses (Restaurants, Stays, or Both) using the **Google Places (New) API** and **TomTom Search API**, evaluates website availability, verifies business facts, allows structured extra data entry, and generates professional, hospitality-grade website previews for businesses without an active web presence.
+A full-stack Node.js + Express web application that discovers hospitality businesses (Restaurants, Stays, or Both) using the **Google Places (New) API** and **TomTom Search API**, evaluates website availability, verifies business facts, allows structured extra data entry and photo uploads, and generates professional, hospitality-grade website previews for businesses without an active web presence.
 
 ---
 
-## 🌟 Key Features
+## 🌟 Key Features & Implementation Details (Sections 1 – 5)
 
-### 1. Smart Place Search & Verification
-- **Dual Providers**: Google Places (New) Text Search with automatic fallback to TomTom POI Category API.
-- **Auto-Expanding Radius**: Dynamically expands search radius (2 km → 5 km → 10 km) if initial search yields fewer than 5 places.
-- **Parallel Website Availability Check**: Rapid HEAD/GET verification classifying sites into *Active*, *Active (restricted)*, *Inactive*, or *Not listed*.
-- **10-Minute Query Cache**: In-memory caching for duplicate searches to preserve quota.
-- **Excel Export**: Clean spreadsheet export formatted with ExcelJS including places, health status, ratings, and map links.
-
----
-
-### 2. Review Window: Extra Data Entry & Verification
-Every preview undergoes intern verification in the review modal before generation:
-- **Photo Assignment (up to 12 photos)**:
-  - Fetched via Google Maps pin thumbnails (through the secure `/api/photo` proxy).
-  - Interns can tag each photo as **Hero** (rendered at max width 1200px), **Gallery** (width 800px), **Room Photo** (assigned to a specific room), or **Menu/Food**.
-  - All images are lazy-loaded to optimize browser performance and API credits.
-- **Rooms Editor (Stays)**:
-  - Add room types with: Room Name, Size (sq ft), Capacity, Bed Type, Rate / Tariff per night, Amenities, Short Description, and citation source note (*Owner confirmed* / *Pin photo*).
-- **Menu Editor (Restaurants)**:
-  - Manual entry: Category, Item Name, Price, Veg/Non-Veg/Egg tag, Description, and citation source note (*Owner confirmed* / *Pin photo*).
-  - **Bulk Paste Tool**: Paste multiple menu lines in the standard pipe-delimited format:
-    ```text
-    Category | Item | Price | Veg/Non-veg | Description (optional)
-    ```
-    Parses lines into an interactive preview table where interns can edit or delete items before accepting all into the menu.
-- **Optional Hospitality Fields**:
-  - Online Ordering Link (Zomato / Swiggy / direct)
-  - Table Reservation Link (EazyDiner / Dineout / partner portal)
-  - Direct Booking Link (Booking.com / property booking engine)
-  - Instagram handle or profile URL
-  - Check-in and Check-out timings
-  - Property House Rules & Policies
-  - *Rule*: Buttons or sections appear on the page **only if** their respective field has a value.
-- **Dynamic Verification Checkboxes**:
-  - The "Generate Website" button remains disabled until every shown field (read-only fetched fields, photo assignments, room types, menu items, and optional links) is individually verified and checked.
-- **WhatsApp Mobile Validation**:
-  - Validates Indian mobile numbers (10 digits starting with 6, 7, 8, or 9 formatted as `+91`).
-  - Landlines (e.g. `080` Bengaluru) receive phone Call buttons only; WhatsApp is omitted.
+### 1. Table Layout: No Horizontal Scrolling for Actions (Section 1)
+- **Sticky Columns with Solid Backgrounds**:
+  - **Name Column** is sticky on the left edge (`left: 0`).
+  - **Action Column** (Generate Website, Details, Refresh) is sticky on the right edge (`right: 0`).
+  - Solid background colors prevent content from showing through during scrolling (`#1F2937` on table headers, `var(--bg-card)` on table cells).
+- **Narrow & Compact Layout**:
+  - Truncated addresses (`.address-cell`) with ellipsis and full address in tooltip and Details drawer.
+  - Compact opening hours (`.hours-compact`): displays "Today: 10:00 AM–10:00 PM" with the full 7-day schedule visible in a hover tooltip.
+  - Rating and review count combined in a single narrow column (`4.2 ★ (120)`).
+  - Compact phone number and map link columns.
+- **Mobile Card Layout (under 900 px)**:
+  - Automatically switches each place into a responsive card layout displaying name, type, phone, rating, website status, and action buttons.
+  - `overflow-x: hidden !important` eliminates horizontal scrolling completely.
+- **Filters & Excel Export**:
+  - Keeps sorting, category filters, website status filters, and Excel export intact.
 
 ---
 
-### 3. Preview Link Compression & URL Size Enforcement
-- URL tokens carry all business and entered data directly in the URL using **zlib deflate** compression and **base64url** encoding.
-- Hard limit of **12000 characters** enforced on token length (with payload review & room description optimization).
-- If entered data exceeds the limit, the server rejects generation with HTTP 400 and the review modal displays a clear warning prompting the intern to reduce photos, trim descriptions, or reduce menu items.
-- Tested and verified with 40 menu items and 6 detailed rooms (< 1500 chars).
+### 2. Warning Icon Logic (Section 2)
+- **Exact Warning Criteria**:
+  - **Amber "Verify" Warnings**:
+    1. Missing phone number.
+    2. Phone not in valid Indian 10-digit mobile/landline format.
+    3. Missing opening hours.
+    4. Business marked `CLOSED_TEMPORARILY` on Google Maps.
+    5. Name contains a phone number or promotional text (e.g., `"call 80882..."`).
+    6. Address is missing a 6-digit postal pincode.
+  - **Grey "Info" Flag**:
+    - No rating or reviews on Google.
+  - **No Warning for Missing Website**:
+    - Finding places without websites is the core objective of the tool, so missing websites are never flagged as warnings.
+- **Interactive Warning Popover**:
+  - Hover, click, or keyboard focus opens an accessible popover detailing each verification issue and info item.
+- **Legend & Filter**:
+  - Legend added above the results table: `⚠ = data to verify before generating`.
+  - Filter checkbox: **"Hide places with warnings"**.
 
 ---
 
-### 4. 6 Stay Layout Themes (Hospitality Grade)
-Layouts differ fundamentally in structure, section hierarchy, hero type, and components:
-1. **Eco-lodge / Nature (`eco-lodge`)**: Organic rounded accents, earthy forest tones, full-bleed hero with Ken Burns zoom, and focus on sustainability amenities.
-2. **Urban Sleek (`urban-sleek`)**: Modern two-column grid layout, high-contrast monochrome aesthetic, split hero with typography on left and media stage on right.
-3. **Heritage / Homestay (`heritage-homestay`)**: Warm serif editorial typography, textured story sections, magazine-style quote highlights, and traditional hospitality layout.
-4. **Beach / Resort (`beach-resort`)**: Bright and airy ocean tones, fluid wave dividers, full-viewport hero backdrop, and horizontal photo showcase.
-5. **Luxury (`luxury`)**: Dark obsidian with champagne gold accents, cinematic minimal hero with hairline dividers, and large room showcases.
-6. **Budget / PG / Hostel (`budget-hostel`)**: Information-first layout, practical cards highlighting room tariff, rules, and facilities.
-
-#### Automatic Determinism & Manual Override:
-- Selected automatically based on Google place types, name keywords, and an FNV-1a hash of the Place ID. The same place ID always gets the exact same layout.
-- Review window dropdown allows overriding with any theme.
-
-#### Stay Components:
-- **Hero**: Atmospheric full-bleed hero with Ken Burns zoom animation. If no photos exist, renders an animated SVG gradient mesh with zero `<img>` tags.
-- **Sticky Booking Widget**: Prominent booking form with Check-in, Check-out, Guests, and Room Type. Submits a prefilled WhatsApp booking request to the property or triggers Call for landlines.
-- **Rooms & Rates Grid**: Room cards with specs, tariffs, amenities, and photo thumbnail. Clicking a card opens a modal / drawer with complete room specs (also accessible via URL hash `#room-{i}`).
-- **Photo Gallery & Lightbox**: Responsive masonry grid with hover zoom, keyboard navigation (`Escape`, `ArrowLeft`, `ArrowRight`), touch swipe support on mobile, and Google author attributions.
-- **Verified Amenities**: Highlight chips derived strictly from true Google flags (parking, pet-friendly, wheelchair accessibility, payment methods).
-- **Reviews Section**: Authentic Google contributor reviews with star ratings and Google attribution.
-- **Opening Hours Table**: Live table with current day highlighted with a `TODAY` badge and live pulsing status pill (`Open now` / `Closed`).
-- **Location & Directions**: Embedded Google Maps iframe with direct "Get directions on Google Maps" button.
-- **Quick Answers FAQ**: Accessible `<details>` accordion built exclusively from verified facts.
-- **Floating Actions**: Desktop floating call/WhatsApp pills and fixed mobile bottom action bar (`<641px`).
+### 3. Review Window: Editable Fields & Photo Uploads (Section 3)
+- **Zero-Photo Messaging**:
+  - Shows `"No photos found on this place's Google pin. You can upload owner-provided photos below."` when Google returns zero photos.
+- **Editable Fields with Mandatory Verification**:
+  - **Display Name**: Editable, displays original Google name alongside it.
+  - **Phone Number**: Editable in `+91` format.
+  - **WhatsApp Number**: Editable with Indian mobile validation.
+  - **Opening Hours**: Editable custom hours text (verification checkbox only appears when text is entered).
+  - **Short Description**: Editable editorial summary.
+  - Each field has a required **"Verified"** checkbox. "Generate Website" remains disabled until all active fields are confirmed.
+- **Phone Number in Name Detection**:
+  - If a phone number or promo text is detected in the Google name, a banner suggests a cleaned business name and offers to automatically move the extracted number into the Phone field (requires confirmation).
+- **Owner-Provided Photo Uploads**:
+  - **"+ Add photo" button** is always accessible, even when Google returns 0 photos.
+  - Supported formats: **JPEG, PNG, WebP** (max 5 MB each).
+  - Resized client-side to max 1600 px via HTML5 Canvas with EXIF metadata stripped.
+  - Total photo count capped at 12 photos (Google + uploaded photos combined).
+  - Mandatory permission checkbox: *"This photo was provided by the owner or taken by us, and is used with the owner's permission."*
+  - Marked with an **"Owner-provided"** badge with no Google Maps Contributor attribution.
+  - Includes a **Delete** action for uploads.
+  - **Existing photo picker selection logic preserved**: removed photos are never used; if any are ticked only those are used; if none are ticked all non-removed photos are used.
 
 ---
 
-### 5. 6 Restaurant Layout Themes (Hospitality Grade)
-1. **Fine Dining / Steakhouse (`fine-dining`)**: Dark, warm ambient lighting accents, cinematic luxury hero, and reservation-first navigation.
-2. **Casual Cafe (`casual-cafe`)**: Bright, clean typography, playful menu cards, and focus on breakfast/coffee highlights.
-3. **Family Restaurant (`family-restaurant`)**: Warm terracotta tones, large prominent menu cards, and multi-cuisine highlights.
-4. **Bar & Pub (`bar-pub`)**: Dark obsidian mode with electric accents, bold typography, and taproom/craft beverage highlights.
-5. **Traditional Indian (`traditional-indian`)**: Earthy palette, heritage serif typography, and tandoor/thali highlights.
-6. **Bakery / Fast Food (`bakery-fast-food`)**: Colorful, large touch-friendly buttons, and quick-order CTA focus.
+### 4. Coverage for Big Cities & Search by Name (Section 4)
 
-#### Restaurant Components:
-- **Hero**: Hero banner with name, rating, review count, price level in ₹ symbols, cuisine type, and live open/closed badge.
-- **Sticky Top Navigation**: Persistent navigation with "Reserve a Table", "Order Online", "Call", "Directions", and "Hours" buttons. Positioned below the disclaimer banner so it never covers it.
-- **Interactive HTML Menu**:
-  - Category tabs ("All", "Starters", "Mains", "Desserts", etc.).
-  - Real-time search filter box.
-  - Pure Veg / Non-Veg toggle buttons.
-  - Fallback to Menu Photos gallery if no typed menu exists, or "Contact us for the menu" if neither is available.
-- **Table Reservation Modal**: Interactive reservation form with Date, Time, and Guest selection that opens WhatsApp with a prefilled reservation message or dials reception for landlines.
-- **Food & Ambiance Gallery**: Lightbox with hover zoom using only pin photos.
-- **Highlights**: Verified features chips (dine-in, takeout, delivery, outdoor seating, reservations, vegetarian food).
+#### Root Cause Analysis: Why "Hotel Hanumanthu" in Mysuru Was Missing
+1. **Type Classification**: Google Places returns types `['chicken_restaurant', 'south_indian_restaurant', 'hotel', 'indian_restaurant', 'lodging', 'restaurant', ...]`. In India, "Hotel" often refers to a restaurant. The legacy system classified any place with "hotel" or "lodging" as a Stay. Because queries were filtered by category, it was misclassified or filtered out.
+2. **Missing `primaryType`**: The legacy API calls omitted Google's `primaryType` field mask. Google Places (New) explicitly provides `primaryType: "restaurant"`.
+3. **Query Wordings**: Food queries lacked typical Indian non-veg/military hotel wordings like `"biryani"`, `"mess"`, `"military hotel"`, `"meals"`, `"tiffin"`.
+4. **Search Radius**: Hotel Hanumanthu is located in Mandi Mohalla, Mysuru. A single 3 km radius from the city center did not cover all commercial dining clusters.
 
----
-
-### 6. Non-Negotiable Rules & Security Controls
-- **Never Invent Facts**: All content is strictly derived from Google Maps pin data or typed by the intern. Empty sections are cleanly hidden.
-- **No Stock or AI Images**: Zero stock/AI imagery. Photos are served only through the server-side `/api/photo` proxy.
-- **Price Levels**: Displayed strictly as `₹` symbols (`₹` to `₹₹₹₹`).
-- **Legal Preview Disclaimer**: Pinned top banner (`#top-disc`) and footer disclaimer:
-  > *"Preview prepared for {Business Name} by Susunetech. This is a draft preview created for demonstration purposes only. It is not the official website of the business and has not been approved or published by the owner."*
-- **SEO & Indexing Guard**: `<meta name="robots" content="noindex, nofollow">`, `X-Robots-Tag: noindex, nofollow` header on `/preview/:token`, and `Disallow: /preview` in `robots.txt`.
-- **Zero API Key Leakage**: API keys remain strictly server-side in environment variables and never appear in client-side HTML, URLs, or error messages.
-- **HTML Escaping**: All user-provided and API strings are escaped against XSS attacks.
-- **Accessibility & Responsiveness**: Fluid typography (`clamp()`), touch targets >= 44px, tested at 360px, 768px, 1024px, and 1440px widths, and full compliance with `prefers-reduced-motion`.
+#### Fixes Implemented:
+- Classify places using Google's `primaryType` first, checking restaurant types before stay types.
+- Expanded food queries: `"family restaurant"`, `"mess"`, `"tiffin"`, `"biryani"`, `"meals"`, `"military hotel"`, `"darshini"`, `"hotel"`.
+- Expanded stay queries: `"lodge"`, `"dormitory"`, `"service apartment"`.
+- **Search Area Selector**:
+  - **Small (3 km)**: Single center query.
+  - **Medium (6 km)**: 4-cell spatial grid.
+  - **Large (12 km)**: 9-cell spatial grid.
+  - **City-wide**: Up to 16-cell spatial grid with progressive batching (5 requests per batch with 150 ms delays).
+- **Search by Name Box**:
+  - Search any business name + town (e.g., `"Hotel Hanumanthu, Mysuru"`).
+  - Preview name, address, types, and operational status.
+  - Add the chosen place directly into the table with all standard columns and actions.
+- **Coverage & Safety Guards**:
+  - Hard stop above 150 requests per search.
+  - Confirmation prompt displaying the estimated request count before running large searches.
+  - Daily request counter refuses searches beyond 400 requests/day.
+  - Coverage report displays permanently closed counts (e.g., *"3 permanently closed places hidden"*).
 
 ---
 
-## 🛠️ Testing
+## ☁️ External Object Storage Setup (Vercel Blob)
 
-The project includes automated verification test suites:
+For production deployment on Vercel (where the server filesystem is read-only and ephemeral), photo uploads are stored in **Vercel Blob**.
 
-```bash
-# Run all automated test suites together
-node run_all_tests.js
+### Environment Variables Required
+In your Vercel Project Settings (under **Settings → Environment Variables**), add:
+
+```env
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_****************************
 ```
 
-Included test suites:
-- `test_all_features.js`: Comprehensive suite testing 4 stays, 4 restaurants, determinism, all 12 theme overrides, 40-item menu and 6-room compression within token limit, 12000 char rejection, interactive menu filtering, booking forms, room drawer deep-linking, lightbox, FAQ accordion, landline vs mobile rules, and disclaimers.
-- `test_redesign.js`: Redesign suite testing layout themes, Ken Burns hero, SVG gradient fallback, lightbox gestures, live hours table, and mobile floating action bar.
-- `test_features.js`: Automated testing for search endpoint, website health status checks, Excel export, and robots headers.
-- `test_run.js`: Deep verification of phone normalization, landline vs WhatsApp logic, and templates.
+### How to Get Your Token:
+1. Log in to the [Vercel Dashboard](https://vercel.com).
+2. Go to your project and click the **Storage** tab.
+3. Click **Create Database** and select **Blob**.
+4. Choose a database name and region, then click **Create**.
+5. Go to the **Quickstart** or **Settings** tab and copy `BLOB_READ_WRITE_TOKEN`.
+6. Add it to your project's Environment Variables for Production, Preview, and Development.
+
+### Local Development Fallback:
+If `BLOB_READ_WRITE_TOKEN` is not set (e.g., during local testing), the app automatically falls back to an **in-memory object storage** with random unguessable IDs served via `/api/uploaded-photo/:id` with automatic 30-day time-to-live cleanup.
+
+---
+
+## 🛠️ Automated Testing
+
+Run the automated test suites:
+
+```bash
+# Full test suite covering Sections 1 through 5
+node test_suite_sections_1_to_5.js
+
+# Viewport responsiveness (1366px, 1024px, 768px, 390px) & warning rules
+node test_viewport_and_warnings.js
+
+# Legacy section test suite
+node test_sections_1_2_3.js
+```
 
 ---
 
 ## 💻 Tech Stack
 - **Backend**: Node.js, Express
+- **Cloud Storage**: `@vercel/blob` (Vercel Blob)
 - **APIs**: Google Places (New) API, TomTom Search API
 - **Export**: ExcelJS
-- **Frontend**: Vanilla HTML5, CSS3 (CSS custom properties, CSS Grid, Flexbox), Vanilla JavaScript (no external CDNs or heavy UI libraries)
-- **Deployment**: Vercel-ready with stateless in-memory compression and proxy routing.
+- **Frontend**: Vanilla HTML5, CSS3, Vanilla JavaScript (zero external CDN or framework dependencies)
+- **Deployment**: Vercel-ready with stateless preview generation and proxy routing.

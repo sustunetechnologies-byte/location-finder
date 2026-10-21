@@ -54,6 +54,18 @@
         </div>
 
         <div class="form-group select-group">
+          <label for="area-select">Search Area</label>
+          <div class="select-wrapper">
+            <select id="area-select">
+              <option value="small" selected>Small (3 km)</option>
+              <option value="medium">Medium (6 km, 4 cells)</option>
+              <option value="large">Large (12 km, 9 cells)</option>
+              <option value="city">City-wide (16 cells)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group select-group">
           <label for="source-select">Data Source</label>
           <div class="select-wrapper">
             <select id="source-select">
@@ -83,13 +95,37 @@
       </form>
     </section>
 
+    <!-- Search by Name Section (Sec4) -->
+    <section class="search-by-name-card" id="search-by-name-section">
+      <div class="search-by-name-header">
+        <h3 class="search-by-name-title">🔎 Search by Business Name</h3>
+        <p class="subtext">Find a specific place by name and city/town (e.g. "Hotel Hanumanthu" in "Mysuru") and add it to the table.</p>
+      </div>
+      <form id="search-by-name-form" class="search-by-name-form">
+        <div class="form-group flex-grow">
+          <label for="name-query-input">Business Name</label>
+          <input type="text" id="name-query-input" placeholder="e.g. Hotel Hanumanthu" required autocomplete="off">
+        </div>
+        <div class="form-group" style="min-width:180px;">
+          <label for="name-town-input">City / Town</label>
+          <input type="text" id="name-town-input" placeholder="e.g. Mysuru" required autocomplete="off">
+        </div>
+        <div class="form-group" style="align-self:flex-end;">
+          <button type="submit" id="btn-name-search" class="btn btn-secondary" style="height:48px;">
+            <span>Search Google</span>
+          </button>
+        </div>
+      </form>
+      <div id="name-search-results" class="name-search-results hidden"></div>
+    </section>
+
     <!-- Main Results Container -->
     <main class="results-card">
       <!-- Loading State -->
       <div id="loading-state" class="state-container hidden">
         <div class="spinner"></div>
         <p id="loading-text" class="state-text">Searching nearby places and checking website health...</p>
-        <span class="subtext">This takes just a few seconds...</span>
+        <span class="subtext">Running multiple queries for better coverage, this takes a few seconds...</span>
       </div>
 
       <!-- Error State -->
@@ -155,6 +191,24 @@
           </div>
         </div>
 
+        <!-- Coverage Report Panel (Sec2) -->
+        <div id="coverage-panel" class="coverage-panel hidden">
+          <div class="coverage-header">
+            <h3 class="coverage-title">🔍 Search Coverage Report</h3>
+          </div>
+          <div id="coverage-content" class="coverage-content"></div>
+          <!-- Add Missing Place (Sec2) -->
+          <div id="add-missing-section" class="add-missing-section hidden">
+            <h4 class="add-missing-title">Add Missing Place</h4>
+            <p class="modal-hint">If a place is missing from the results, search for it here and add it to the table.</p>
+            <div class="add-missing-row">
+              <input type="text" id="add-missing-name" class="modal-input" placeholder="Business name (e.g. Hotel Sunrise, Kumta)">
+              <button type="button" id="add-missing-search" class="btn btn-sm btn-secondary">Search &amp; Add</button>
+            </div>
+            <div id="add-missing-results" class="add-missing-results"></div>
+          </div>
+        </div>
+
         <!-- Results Bar -->
         <div class="results-header">
           <div class="summary-info">
@@ -164,9 +218,18 @@
           </div>
 
           <div class="controls-group">
+            <div class="table-legend" id="table-legend">
+              <span class="legend-item"><span class="legend-warn">⚠</span> = data to verify before generating</span>
+            </div>
+
             <label class="filter-checkbox">
               <input type="checkbox" id="active-only-checkbox">
               <span class="checkbox-label">Show only active websites</span>
+            </label>
+
+            <label class="filter-checkbox">
+              <input type="checkbox" id="hide-warnings-checkbox">
+              <span class="checkbox-label">Hide places with warnings</span>
             </label>
 
             <button id="download-excel-btn" class="btn btn-export" disabled>
@@ -185,16 +248,16 @@
           <table class="places-table">
             <thead>
               <tr>
-                <th data-sort="name" class="sortable">Name <span class="sort-icon">↕</span></th>
-                <th data-sort="type" class="sortable">Type <span class="sort-icon">↕</span></th>
-                <th data-sort="address" class="sortable">Address <span class="sort-icon">↕</span></th>
-                <th>Phone</th>
-                <th data-sort="rating" class="sortable">Rating <span class="sort-icon">↕</span></th>
-                <th data-sort="website" class="sortable">Website <span class="sort-icon">↕</span></th>
-                <th data-sort="websiteStatus" class="sortable">Website Status <span class="sort-icon">↕</span></th>
-                <th>Opening Hours</th>
-                <th>Map Link</th>
-                <th>Action</th>
+                <th data-sort="name" class="sortable col-name">Name <span class="sort-icon">↕</span></th>
+                <th data-sort="type" class="sortable col-type">Type <span class="sort-icon">↕</span></th>
+                <th data-sort="address" class="sortable col-address">Address <span class="sort-icon">↕</span></th>
+                <th class="col-phone">Phone</th>
+                <th data-sort="rating" class="sortable col-rating">Rating <span class="sort-icon">↕</span></th>
+                <th data-sort="website" class="sortable col-website">Website <span class="sort-icon">↕</span></th>
+                <th data-sort="websiteStatus" class="sortable col-status">Website Status <span class="sort-icon">↕</span></th>
+                <th class="col-hours">Opening Hours</th>
+                <th class="col-map">Map</th>
+                <th class="col-action">Action</th>
               </tr>
             </thead>
             <tbody id="places-tbody">
@@ -241,22 +304,120 @@
           <div class="review-grid" id="review-fields"></div>
         </div>
 
-        <!-- No Photos Note -->
-        <div id="no-photos-note" class="missing-data-box hidden">
-          No photos or reviews available for this key. Add photos later with a billing-enabled key or use owner-approved photos.
+        <!-- Editable Details Section with Verified Checkboxes (Section 3) -->
+        <div class="modal-section" id="editable-fields-section">
+          <div class="modal-section-header">
+            <h3 class="modal-section-title">Editable Details &amp; Verification</h3>
+            <span class="source-tag">Intern Verification Required</span>
+          </div>
+          <p class="modal-hint">Review and edit business details. Each field requires its "Verified" box ticked before generating.</p>
+
+          <!-- Cleaned Name Suggestion Banner (if phone in name) -->
+          <div id="clean-name-banner" class="clean-name-banner hidden">
+            <div class="clean-name-content">
+              <span class="clean-name-badge">⚠ Phone number detected in Google name</span>
+              <p id="clean-name-text" class="clean-name-desc"></p>
+              <button type="button" id="btn-apply-cleaned-name" class="btn btn-sm btn-secondary">
+                ✓ Use cleaned name &amp; move number to Phone field
+              </button>
+            </div>
+          </div>
+
+          <div class="editable-fields-grid">
+            <!-- Display Name -->
+            <div class="editable-field-group">
+              <div class="editable-field-header">
+                <label for="edit-display-name">Display Name</label>
+                <span class="orig-google-label">Google pin: <strong id="orig-google-name"></strong></span>
+              </div>
+              <input type="text" id="edit-display-name" class="modal-input" placeholder="Display name on website" required>
+              <label class="field-verify-check" for="v-edit-name">
+                <input type="checkbox" id="v-edit-name" class="verification-checkbox">
+                <span>Verified: Display Name</span>
+              </label>
+            </div>
+
+            <!-- Phone (+91 format) -->
+            <div class="editable-field-group">
+              <div class="editable-field-header">
+                <label for="edit-phone">Phone Number (+91 format)</label>
+              </div>
+              <input type="tel" id="edit-phone" class="modal-input" placeholder="+91 98765 43210">
+              <span id="edit-phone-validation" class="validation-msg"></span>
+              <label class="field-verify-check" for="v-edit-phone">
+                <input type="checkbox" id="v-edit-phone" class="verification-checkbox">
+                <span>Verified: Phone number</span>
+              </label>
+            </div>
+
+            <!-- WhatsApp Number -->
+            <div class="editable-field-group">
+              <div class="editable-field-header">
+                <label for="whatsapp-input">WhatsApp Number</label>
+                <span class="subtext">10-digit Indian mobile (starts 6–9)</span>
+              </div>
+              <input type="tel" id="whatsapp-input" class="modal-input" placeholder="e.g. 9876543210" maxlength="15">
+              <span id="whatsapp-validation" class="validation-msg"></span>
+              <label class="field-verify-check" for="v-edit-whatsapp">
+                <input type="checkbox" id="v-edit-whatsapp" class="verification-checkbox">
+                <span>Verified: WhatsApp number</span>
+              </label>
+            </div>
+
+            <!-- Opening Hours Text (only if entered) -->
+            <div class="editable-field-group">
+              <div class="editable-field-header">
+                <label for="edit-hours">Opening Hours Text</label>
+                <span class="subtext">Only verified if entered</span>
+              </div>
+              <textarea id="edit-hours" class="modal-input" rows="2" placeholder="e.g. Mon-Sun: 10:00 AM - 10:00 PM (or leave blank)"></textarea>
+              <label class="field-verify-check" id="v-edit-hours-wrap" for="v-edit-hours">
+                <input type="checkbox" id="v-edit-hours" class="verification-checkbox">
+                <span>Verified: Opening Hours</span>
+              </label>
+            </div>
+
+            <!-- Short Description -->
+            <div class="editable-field-group editable-field-full">
+              <div class="editable-field-header">
+                <label for="edit-description">Short Description / Editorial Summary</label>
+              </div>
+              <textarea id="edit-description" class="modal-input" rows="2" placeholder="Brief summary of this business (e.g. Traditional Mysuru eatery renowned for authentic mutton pulav and biryani)"></textarea>
+              <label class="field-verify-check" for="v-edit-desc">
+                <input type="checkbox" id="v-edit-desc" class="verification-checkbox">
+                <span>Verified: Short Description</span>
+              </label>
+            </div>
+          </div>
         </div>
 
-        <!-- Photo Assignment (Section 1) -->
-        <div class="modal-section hidden" id="photo-assignment-section">
+        <!-- No Photos Note (Section 3) -->
+        <div id="no-photos-note" class="missing-data-box hidden">
+          No photos found on this place's Google pin. You can upload owner-provided photos below.
+        </div>
+
+        <!-- Photo Picker Section (Sec1 & Sec3) -->
+        <div class="modal-section" id="photo-assignment-section">
           <div class="modal-section-header">
-            <h3 class="modal-section-title">Photo Assignment (optional, up to 12 photos)</h3>
-            <span class="source-tag">Source: pin photo</span>
+            <h3 class="modal-section-title">Photo Selection &amp; Uploads (up to 12 photos)</h3>
+            <span class="source-tag">Pin photos &amp; Owner uploads</span>
           </div>
-          <p class="modal-hint">Assign each pin photo as Hero (width 1200), Gallery, Room photo, or Menu/Food. Images are lazy-loaded.</p>
+          <p class="modal-hint">Click a thumbnail to preview. Tick "Keep" to explicitly include. Upload owner-provided photos with permission. Assign roles (Hero / Gallery / Room / Menu-Food).</p>
+
+          <!-- Toolbar (Sec1 & Sec3) -->
+          <div id="photo-picker-toolbar" class="photo-picker-toolbar">
+            <button type="button" id="btn-add-photo" class="btn-picker-tool btn-picker-add">📷 + Add photo</button>
+            <input type="file" id="photo-upload-input" accept="image/jpeg,image/png,image/webp" multiple class="hidden">
+            <button type="button" id="btn-select-all" class="btn-picker-tool">☑ Select All</button>
+            <button type="button" id="btn-clear-selection" class="btn-picker-tool">☐ Clear Selection</button>
+            <button type="button" id="btn-remove-unselected" class="btn-picker-tool btn-picker-danger">✕ Remove Unselected</button>
+            <button type="button" id="btn-show-removed" class="btn-picker-tool" disabled>Show removed (0)</button>
+          </div>
+          <div id="photo-picker-status" class="photo-picker-status">No photos loaded</div>
           <div id="photos-assignment-grid" class="photos-assignment-grid"></div>
         </div>
 
-        <!-- Rooms Editor for Stays (Section 1) -->
+        <!-- Rooms Editor for Stays -->
         <div class="modal-section hidden" id="rooms-editor-section">
           <div class="modal-section-header">
             <h3 class="modal-section-title">Rooms &amp; Rates (optional)</h3>
@@ -267,7 +428,7 @@
           <button type="button" id="add-room-btn" class="btn-add-item">+ Add Room Type</button>
         </div>
 
-        <!-- Menu Editor for Restaurants (Section 1) -->
+        <!-- Menu Editor for Restaurants -->
         <div class="modal-section hidden" id="menu-editor-section">
           <div class="modal-section-header">
             <h3 class="modal-section-title">Menu Items &amp; Prices (optional)</h3>
@@ -304,14 +465,14 @@ Desserts | Gulab Jamun | ₹120 | Veg | Warm milk solids in saffron syrup"></tex
           <button type="button" id="add-menu-item-btn" class="btn-add-item">+ Add Single Menu Item</button>
         </div>
 
-        <!-- Legacy fallback container for backwards compatibility -->
+        <!-- Legacy fallback container -->
         <div class="modal-section hidden" id="user-items-section">
           <h3 class="modal-section-title" id="user-items-label">Items</h3>
           <div id="user-items-list" class="user-items-list"></div>
           <button type="button" id="add-item-btn" class="btn-add-item">+ Add item</button>
         </div>
 
-        <!-- Optional Fields (Section 1) -->
+        <!-- Optional Fields -->
         <div class="modal-section" id="optional-fields-section">
           <div class="modal-section-header">
             <h3 class="modal-section-title">Additional Links &amp; Policies (optional)</h3>
@@ -346,27 +507,19 @@ Desserts | Gulab Jamun | ₹120 | Veg | Warm milk solids in saffron syrup"></tex
           </div>
         </div>
 
-        <!-- WhatsApp Number -->
-        <div class="modal-section">
-          <h3 class="modal-section-title">WhatsApp Number (optional)</h3>
-          <p class="modal-hint">Leave blank to use the phone number from Google. Must be a 10-digit Indian mobile (starts with 6–9).</p>
-          <input type="tel" id="whatsapp-input" class="modal-input" placeholder="e.g. 9876543210" maxlength="15">
-          <span id="whatsapp-validation" class="validation-msg"></span>
-        </div>
-
         <!-- Design Selection -->
         <div class="modal-section" id="design-selection-section">
           <h3 class="modal-section-title">Design Theme</h3>
           <p class="modal-hint">Choose a layout theme or keep Auto (determined from Google place types &amp; Place ID).</p>
           <div class="select-wrapper">
             <select id="design-select" class="modal-select">
-              <!-- Dynamically populated based on Stay vs Restaurant -->
+              <!-- Dynamically populated -->
             </select>
           </div>
           <p id="design-auto-info" class="modal-hint" style="color:#60A5FA;margin-top:0.25rem;"></p>
         </div>
 
-        <!-- Token Size Warning (Section 2) -->
+        <!-- Token Size Warning -->
         <div id="token-size-warning" class="missing-data-box hidden" style="border-color:#EF4444;background:rgba(239,68,68,0.1);color:#FCA5A5;">
           ⚠️ <strong>Link data too large:</strong> The entered data is too large for a preview URL. Please remove some photos, shorten descriptions, or reduce menu items.
         </div>
@@ -385,6 +538,62 @@ Desserts | Gulab Jamun | ₹120 | Veg | Warm milk solids in saffron syrup"></tex
           </button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Sec3: Photo Upload Permission Modal -->
+  <div id="photo-perm-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" style="z-index:10050;">
+    <div class="modal-card" style="max-width:520px;">
+      <div class="modal-header">
+        <h3 class="modal-title">Photo Permission Confirmation</h3>
+        <button type="button" id="perm-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div style="padding:1.25rem 0;">
+        <p style="margin-bottom:1rem;color:var(--text-secondary);font-size:0.9rem;line-height:1.5;">
+          To comply with non-negotiable rules, photos must only be provided by the business owner or taken by our team. AI-generated images, stock photos, and images scraped from external websites are strictly prohibited.
+        </p>
+        <div style="background:var(--bg-card-alt);border:1px solid var(--border-color);border-radius:8px;padding:0.85rem;margin-bottom:1rem;">
+          <div id="perm-file-info" style="font-size:0.85rem;color:var(--text-primary);margin-bottom:0.75rem;font-weight:600;"></div>
+          <label style="display:flex;align-items:flex-start;gap:0.75rem;cursor:pointer;">
+            <input type="checkbox" id="perm-checkbox" style="margin-top:0.25rem;width:18px;height:18px;accent-color:var(--primary);">
+            <span style="font-size:0.875rem;line-height:1.45;color:var(--text-primary);font-weight:500;">
+              This photo was provided by the owner or taken by us, and is used with the owner's permission.
+            </span>
+          </label>
+        </div>
+        <div id="perm-upload-status" style="font-size:0.85rem;color:var(--text-muted);min-height:20px;"></div>
+      </div>
+      <div class="modal-actions" style="margin-top:0;">
+        <button type="button" id="perm-cancel-btn" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="perm-confirm-btn" class="btn btn-primary" disabled>
+          <span>Upload Photo</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sec3: Details Drawer -->
+  <div id="details-drawer" class="details-drawer hidden" role="complementary" aria-label="Place details">
+    <div class="drawer-header">
+      <h3 class="drawer-title">Place Details</h3>
+      <button type="button" id="details-drawer-close" class="modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div id="details-drawer-content" class="drawer-content"></div>
+  </div>
+
+  <!-- Sec1: Photo Lightbox -->
+  <div id="photo-lightbox" class="photo-lightbox hidden" role="dialog" aria-modal="true" aria-label="Photo preview">
+    <div class="lightbox-inner">
+      <button type="button" id="lightbox-close" class="lightbox-close" aria-label="Close">&times;</button>
+      <button type="button" id="lightbox-prev" class="lightbox-nav lightbox-prev" aria-label="Previous photo">&#8249;</button>
+      <button type="button" id="lightbox-next" class="lightbox-nav lightbox-next" aria-label="Next photo">&#8250;</button>
+      <div class="lightbox-img-wrapper">
+        <div id="lightbox-loading" class="lightbox-loading">
+          <div class="spinner"></div>
+        </div>
+        <img id="lightbox-img" class="lightbox-img" src="" alt="Photo preview" style="transition:opacity 0.2s ease;">
+      </div>
+      <div id="lightbox-author" class="lightbox-author"></div>
     </div>
   </div>
 
