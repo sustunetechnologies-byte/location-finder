@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
@@ -7,6 +8,44 @@ const zlib = require('zlib');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ──────────────────────────────────────────────
+// Configuration & Limits (Sections 1-4)
+// ──────────────────────────────────────────────
+const SEARCH_SECRET = (process.env.SEARCH_SECRET || 'locfinder_hmac_secret_2026').trim();
+const SEARCH_REQUEST_CAP = parseInt(process.env.SEARCH_REQUEST_CAP, 10) || 300;
+const DAILY_REQUEST_CAP = parseInt(process.env.DAILY_REQUEST_CAP, 10) || 1500;
+
+// Load aliases.json (typed legacy name -> official name)
+let ALIASES = {};
+try {
+  const aliasesPath = path.join(__dirname, 'aliases.json');
+  if (fs.existsSync(aliasesPath)) {
+    ALIASES = JSON.parse(fs.readFileSync(aliasesPath, 'utf8'));
+  }
+} catch (e) {
+  console.error('[Server] Failed to load aliases.json:', e.message);
+}
+
+// Famous ambiguous city names across different Indian states
+const KNOWN_AMBIGUOUS_NAMES = {
+  'aurangabad': [
+    { query: 'Chhatrapati Sambhajinagar, Maharashtra', name: 'Chhatrapati Sambhajinagar (Aurangabad)', district: 'Chhatrapati Sambhajinagar', state: 'Maharashtra' },
+    { query: 'Aurangabad, Bihar', name: 'Aurangabad', district: 'Aurangabad', state: 'Bihar' }
+  ],
+  'bilaspur': [
+    { query: 'Bilaspur, Chhattisgarh', name: 'Bilaspur', district: 'Bilaspur', state: 'Chhattisgarh' },
+    { query: 'Bilaspur, Himachal Pradesh', name: 'Bilaspur', district: 'Bilaspur', state: 'Himachal Pradesh' }
+  ],
+  'rampur': [
+    { query: 'Rampur, Uttar Pradesh', name: 'Rampur', district: 'Rampur', state: 'Uttar Pradesh' },
+    { query: 'Rampur, Himachal Pradesh', name: 'Rampur', district: 'Shimla', state: 'Himachal Pradesh' }
+  ],
+  'pratapgarh': [
+    { query: 'Pratapgarh, Uttar Pradesh', name: 'Pratapgarh', district: 'Pratapgarh', state: 'Uttar Pradesh' },
+    { query: 'Pratapgarh, Rajasthan', name: 'Pratapgarh', district: 'Pratapgarh', state: 'Rajasthan' }
+  ]
+};
 
 // ──────────────────────────────────────────────
 // Key Loading (log presence only, never values)
@@ -378,6 +417,7 @@ const GOOGLE_NEARBY_FIELD_MASK = [
 ].join(',');
 
 // Daily counter for Google Places requests (Section 2 & 4)
+// Daily counter for Google Places requests (best-effort counter against DAILY_REQUEST_CAP)
 let dailyRequestCount = 0;
 let dailyCounterDate = new Date().toISOString().split('T')[0];
 
@@ -387,11 +427,11 @@ function checkDailyLimit(requestsNeeded = 1) {
     dailyCounterDate = today;
     dailyRequestCount = 0;
   }
-  if (dailyRequestCount + requestsNeeded > 400) {
+  if (dailyRequestCount + requestsNeeded > DAILY_REQUEST_CAP) {
     throw {
       status: 429,
       code: 'DAILY_LIMIT_EXCEEDED',
-      message: `Daily limit of 400 Google Places API requests reached (${dailyRequestCount}/400 used today). Usage resets tomorrow.`
+      message: `Daily request cap of ${DAILY_REQUEST_CAP} Google Places requests reached (${dailyRequestCount}/${DAILY_REQUEST_CAP} used today). Usage resets tomorrow.`
     };
   }
 }
@@ -400,27 +440,263 @@ function incrementDailyCounter(count = 1) {
   dailyRequestCount += count;
 }
 
+// Exact wordings required by Section 3:
+// Restaurants: "restaurant", "cafe", "bakery", "fast food", "dhaba", "mess", "tiffin", "biryani"
 const RESTAURANT_WORDINGS = [
-  'restaurant', 'cafe', 'bakery', 'hotel restaurant', 'dhaba',
-  'fast food', 'juice and snacks', 'veg restaurant', 'non veg restaurant', 'bar and restaurant',
-  'family restaurant', 'mess', 'tiffin', 'biryani', 'meals', 'military hotel', 'darshini', 'hotel'
+  'restaurant', 'cafe', 'bakery', 'fast food', 'dhaba', 'mess', 'tiffin', 'biryani'
 ];
 
+// Stays: "hotel", "lodge", "guest house", "homestay", "resort", "PG hostel", "service apartment"
 const STAY_WORDINGS = [
-  'hotel', 'lodge', 'guest house', 'homestay', 'resort',
-  'PG hostel', 'farm stay', 'rooms for rent', 'budget hotel',
-  'dormitory', 'service apartment'
+  'hotel', 'lodge', 'guest house', 'homestay', 'resort', 'PG hostel', 'service apartment'
 ];
 
-const RESTAURANT_NEARBY_TYPES = [
-  'restaurant', 'cafe', 'bakery', 'meal_takeaway', 'fast_food_restaurant'
-];
+// Area Types for Google Places location resolution
+const AREA_TYPES = new Set([
+  'locality', 'sublocality', 'sublocality_level_1', 'sublocality_level_2', 'sublocality_level_3',
+  'neighbourhood', 'administrative_area_level_1', 'administrative_area_level_2', 'administrative_area_level_3',
+  'administrative_area_level_4', 'colloquial_area', 'postal_code', 'political'
+]);
 
-const STAY_NEARBY_TYPES = [
-  'lodging', 'hotel', 'guest_house', 'bed_and_breakfast', 'hostel', 'resort_hotel'
-];
+function isAreaResult(types) {
+  if (!Array.isArray(types) || types.length === 0) return false;
+  return types.some(t => AREA_TYPES.has(t));
+}
 
-async function runInBatches(tasks, batchSize = 5, delayMs = 150) {
+function extractState(formattedAddress) {
+  if (!formattedAddress || typeof formattedAddress !== 'string') return '';
+  const parts = formattedAddress.split(',').map(s => s.trim());
+  if (parts.length === 0) return '';
+  let candidate = parts[parts.length - 1];
+  if (/india/i.test(candidate) && parts.length >= 2) {
+    candidate = parts[parts.length - 2];
+  }
+  return candidate.replace(/\b\d{6}\b/g, '').replace(/\d+/g, '').trim();
+}
+
+function extractDistrict(formattedAddress) {
+  if (!formattedAddress || typeof formattedAddress !== 'string') return '';
+  const parts = formattedAddress.split(',').map(s => s.trim());
+  if (parts.length >= 3) {
+    return parts[parts.length - 3];
+  }
+  return parts[0] || '';
+}
+
+async function queryGoogleArea(textQuery) {
+  if (!GOOGLE_KEY) throw { status: 503, message: 'Google Places API key is not configured.' };
+  checkDailyLimit(1);
+  const url = 'https://places.googleapis.com/v1/places:searchText';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': GOOGLE_KEY,
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.viewport,places.types'
+    },
+    body: JSON.stringify({
+      textQuery,
+      regionCode: 'IN',
+      languageCode: 'en',
+      pageSize: 5
+    })
+  });
+  incrementDailyCounter(1);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw { status: res.status, message: `Area search failed (${res.status}): ${txt.slice(0, 150)}` };
+  }
+  const data = await res.json();
+  const places = (data.places || []).filter(p => isAreaResult(p.types));
+  return places;
+}
+
+async function resolveLocation(rawText) {
+  const typed = (rawText || '').trim();
+  if (!typed) throw { status: 400, message: 'Location query is required.' };
+  const typedLower = typed.toLowerCase();
+
+  // 1. Check known ambiguous names (e.g. "Aurangabad", "Bilaspur", etc.)
+  if (KNOWN_AMBIGUOUS_NAMES[typedLower]) {
+    const list = KNOWN_AMBIGUOUS_NAMES[typedLower];
+    const candidates = [];
+    for (const item of list) {
+      try {
+        const places = await queryGoogleArea(item.query);
+        if (places && places.length > 0) {
+          const p = places[0];
+          candidates.push({
+            placeId: p.id,
+            name: p.displayName?.text || item.name,
+            district: item.district || extractDistrict(p.formattedAddress),
+            state: item.state || extractState(p.formattedAddress),
+            formattedAddress: p.formattedAddress,
+            location: { lat: p.location?.latitude, lon: p.location?.longitude },
+            viewport: p.viewport || null
+          });
+        }
+      } catch (err) {
+        console.warn(`[Ambiguous Candidate Error] "${item.query}":`, err.message);
+      }
+    }
+    if (candidates.length > 1) {
+      return { status: 'ambiguous', candidates: candidates.slice(0, 5), typedText: typed };
+    }
+  }
+
+  // 2. Query Google Places Text Search (New)
+  let places = await queryGoogleArea(typed);
+
+  // 3. If no area is found, retry once with ", India" appended
+  if (!places || places.length === 0) {
+    places = await queryGoogleArea(`${typed}, India`);
+  }
+
+  // 4. If still no area, try backup alias from aliases.json
+  if ((!places || places.length === 0) && ALIASES[typedLower]) {
+    const officialAlias = ALIASES[typedLower];
+    places = await queryGoogleArea(officialAlias);
+    if (!places || places.length === 0) {
+      places = await queryGoogleArea(`${officialAlias}, India`);
+    }
+  }
+
+  if (!places || places.length === 0) {
+    throw { status: 404, message: `Could not resolve any town, city, or area for "${typed}". Please check spelling.` };
+  }
+
+  // 5. If several plausible areas with different place ids are found
+  const uniqueCandidates = [];
+  const seenIds = new Set();
+  for (const p of places) {
+    if (!seenIds.has(p.id)) {
+      seenIds.add(p.id);
+      uniqueCandidates.push({
+        placeId: p.id,
+        name: p.displayName?.text || typed,
+        district: extractDistrict(p.formattedAddress),
+        state: extractState(p.formattedAddress),
+        formattedAddress: p.formattedAddress,
+        location: { lat: p.location?.latitude, lon: p.location?.longitude },
+        viewport: p.viewport || null
+      });
+    }
+  }
+
+  if (uniqueCandidates.length > 1) {
+    return {
+      status: 'ambiguous',
+      candidates: uniqueCandidates.slice(0, 5),
+      typedText: typed
+    };
+  }
+
+  // 6. Exactly one clear area found
+  const best = uniqueCandidates[0];
+  const officialName = best.name;
+  const state = best.state;
+
+  // Log to server console (without keys) whenever typed text and resolved name differ
+  if (typedLower !== officialName.toLowerCase()) {
+    console.log(`[Location Resolver] Typed: "${typed}" -> Resolved: "${officialName}", ${state} (${best.placeId})`);
+  }
+
+  return {
+    status: 'resolved',
+    area: best,
+    typedText: typed
+  };
+}
+
+// HMAC cursor signing & verification
+function signCursor(payload) {
+  const jsonStr = JSON.stringify(payload);
+  const b64 = Buffer.from(jsonStr, 'utf8').toString('base64url');
+  const hmac = crypto.createHmac('sha256', SEARCH_SECRET).update(b64).digest('hex');
+  return `${b64}.${hmac}`;
+}
+
+function verifyCursor(token) {
+  if (!token || typeof token !== 'string') return null;
+  const dotIdx = token.indexOf('.');
+  if (dotIdx === -1) return null;
+  const b64 = token.slice(0, dotIdx);
+  const sig = token.slice(dotIdx + 1);
+  const expectedSig = crypto.createHmac('sha256', SEARCH_SECRET).update(b64).digest('hex');
+  if (sig.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expectedSig, 'hex'))) {
+    return null;
+  }
+  try {
+    const jsonStr = Buffer.from(b64, 'base64url').toString('utf8');
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
+// Single Google Places search with retry and backoff
+async function googleTextSearchSingle(wording, tile, pageToken = null, maxRetries = 2) {
+  if (!GOOGLE_KEY) throw { status: 503, message: 'Google Places API key is not configured.' };
+  const url = 'https://places.googleapis.com/v1/places:searchText';
+
+  const bodyObj = {
+    textQuery: wording,
+    pageSize: 20,
+    locationRestriction: {
+      rectangle: {
+        low: { latitude: tile.latMin, longitude: tile.lngMin },
+        high: { latitude: tile.latMax, longitude: tile.lngMax }
+      }
+    }
+  };
+  if (pageToken) bodyObj.pageToken = pageToken;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      checkDailyLimit(1);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_KEY,
+          'X-Goog-FieldMask': GOOGLE_SEARCH_FIELD_MASK
+        },
+        body: JSON.stringify(bodyObj)
+      });
+      incrementDailyCounter(1);
+
+      if (res.status === 429) {
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, (attempt + 1) * 800));
+          continue;
+        }
+        throw { status: 429, code: 'GOOGLE_429', message: 'Google Places API quota/rate limit reached (429).' };
+      }
+      if (res.status === 403) {
+        throw { status: 403, code: 'GOOGLE_403', message: 'Google Places API key is invalid or restricted (403).' };
+      }
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw { status: res.status, message: `Places search failed (${res.status}): ${txt.slice(0, 150)}` };
+      }
+      const data = await res.json();
+      const places = (data.places || []).filter(p => p.businessStatus !== 'CLOSED_PERMANENTLY');
+      return { places, nextPageToken: data.nextPageToken || null };
+    } catch (err) {
+      if (err.status === 429 && attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, (attempt + 1) * 800));
+        continue;
+      }
+      if (attempt < maxRetries && (!err.status || err.status >= 500)) {
+        await new Promise(r => setTimeout(r, 400));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function runInBatches(tasks, batchSize = 5, delayMs = 100) {
   const results = [];
   for (let i = 0; i < tasks.length; i += batchSize) {
     const batch = tasks.slice(i, i + batchSize);
@@ -431,157 +707,6 @@ async function runInBatches(tasks, batchSize = 5, delayMs = 150) {
     }
   }
   return results;
-}
-
-async function googleTextSearch(queryText, restriction = null, maxPages = 3) {
-  if (!GOOGLE_KEY) throw { status: 503, code: 'NO_GOOGLE_KEY', message: 'Google Places API key is not configured.' };
-
-  const url = 'https://places.googleapis.com/v1/places:searchText';
-  let allPlaces = [];
-  let nextPageToken = null;
-  let pagesFetched = 0;
-  let closedCount = 0;
-
-  for (let page = 0; page < maxPages; page++) {
-    try {
-      checkDailyLimit(1);
-    } catch (limErr) {
-      if (allPlaces.length > 0) break;
-      throw limErr;
-    }
-
-    const bodyObj = { textQuery: queryText, pageSize: 20 };
-    if (nextPageToken) {
-      bodyObj.pageToken = nextPageToken;
-    }
-    if (restriction && restriction.rectangle) {
-      bodyObj.locationRestriction = restriction;
-    } else if (restriction && restriction.circle) {
-      bodyObj.locationBias = restriction;
-    }
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': GOOGLE_KEY,
-        'X-Goog-FieldMask': GOOGLE_SEARCH_FIELD_MASK
-      },
-      body: JSON.stringify(bodyObj)
-    });
-
-    incrementDailyCounter(1);
-    pagesFetched++;
-
-    if (res.status === 403) throw { status: 403, code: 'GOOGLE_403', message: 'Google Places API key is invalid, not enabled, or restricted (403). Check your API Console.' };
-    if (res.status === 429) throw { status: 429, code: 'GOOGLE_429', message: 'Google Places API daily quota reached (429). Usage resets the next day.' };
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      throw { status: res.status, message: `Google Places search failed (${res.status}): ${txt.slice(0, 200)}` };
-    }
-
-    const data = await res.json();
-    // Exclude ONLY CLOSED_PERMANENTLY; keep count of permanently closed
-    const places = (data.places || []).filter(p => {
-      if (p.businessStatus === 'CLOSED_PERMANENTLY') {
-        closedCount++;
-        return false;
-      }
-      return true;
-    });
-    allPlaces.push(...places);
-
-    nextPageToken = data.nextPageToken || null;
-    if (!nextPageToken) break;
-  }
-
-  return { places: allPlaces, pagesFetched, closedCount };
-}
-
-async function googleNearbySearch(center, radiusMeters, includedTypes, rankPreference = 'POPULARITY') {
-  if (!GOOGLE_KEY) throw { status: 503, code: 'NO_GOOGLE_KEY', message: 'Google Places API key is not configured.' };
-
-  checkDailyLimit(1);
-
-  const url = 'https://places.googleapis.com/v1/places:searchNearby';
-  const body = JSON.stringify({
-    includedTypes,
-    maxResultCount: 20,
-    rankPreference,
-    locationRestriction: {
-      circle: {
-        center: { latitude: center.lat, longitude: center.lon },
-        radius: radiusMeters
-      }
-    }
-  });
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': GOOGLE_KEY,
-      'X-Goog-FieldMask': GOOGLE_NEARBY_FIELD_MASK
-    },
-    body
-  });
-
-  incrementDailyCounter(1);
-
-  if (res.status === 403) throw { status: 403, code: 'GOOGLE_403', message: 'Google Places API key is invalid, not enabled, or restricted (403). Check your API Console.' };
-  if (res.status === 429) throw { status: 429, code: 'GOOGLE_429', message: 'Google Places API daily quota reached (429). Usage resets the next day.' };
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw { status: res.status, message: `Google Places Nearby search failed (${res.status}): ${txt.slice(0, 200)}` };
-  }
-
-  const data = await res.json();
-  let closedCount = 0;
-  const places = (data.places || []).filter(p => {
-    if (p.businessStatus === 'CLOSED_PERMANENTLY') {
-      closedCount++;
-      return false;
-    }
-    return true;
-  });
-  return { places, closedCount };
-}
-
-async function resolveLocationCenter(locationStr) {
-  if (TOMTOM_KEY) {
-    try {
-      const pos = await geocodeLocationTomTom(locationStr);
-      if (pos && pos.lat && pos.lon) return { lat: pos.lat, lon: pos.lon };
-    } catch {}
-  }
-  if (GOOGLE_KEY) {
-    try {
-      checkDailyLimit(1);
-      const url = 'https://places.googleapis.com/v1/places:searchText';
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': GOOGLE_KEY,
-          'X-Goog-FieldMask': 'places.location,places.viewport'
-        },
-        body: JSON.stringify({ textQuery: locationStr, pageSize: 1 })
-      });
-      incrementDailyCounter(1);
-      if (res.ok) {
-        const data = await res.json();
-        const first = data.places?.[0];
-        if (first?.location) {
-          return {
-            lat: first.location.latitude,
-            lon: first.location.longitude,
-            viewport: first.viewport || null
-          };
-        }
-      }
-    } catch {}
-  }
-  return null;
 }
 
 // ──────────────────────────────────────────────
@@ -856,7 +981,284 @@ async function resolveWebsiteStatus(place) {
 }
 
 // ──────────────────────────────────────────────
-// Main Search Handler
+// POST /api/resolve-location (Section 2)
+// ──────────────────────────────────────────────
+app.post('/api/resolve-location', async (req, res) => {
+  try {
+    const text = (req.body?.text || req.body?.location || '').trim();
+    if (!text) return res.status(400).json({ error: 'Location text is required.' });
+    const result = await resolveLocation(text);
+    return res.json(result);
+  } catch (err) {
+    console.error('[Resolve Location Error]', err.message || err);
+    return res.status(err.status || 500).json({ error: err.message || 'Location resolution failed.' });
+  }
+});
+
+// ──────────────────────────────────────────────
+// Session store for stepped search (Section 3)
+// ──────────────────────────────────────────────
+const searchSessionStore = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of searchSessionStore.entries()) {
+    if (now - v.timestamp > 30 * 60 * 1000) searchSessionStore.delete(k);
+  }
+}, 5 * 60 * 1000);
+
+// ──────────────────────────────────────────────
+// POST /api/search/step — Adaptive tiling with HMAC cursor (Section 3)
+// ──────────────────────────────────────────────
+app.post('/api/search/step', async (req, res) => {
+  try {
+    const { placeId, category = 'both', viewport, cursor } = req.body || {};
+    if (!placeId && !cursor) {
+      return res.status(400).json({ error: 'placeId and viewport are required to start a search.' });
+    }
+
+    const normCategory = (category || 'both').toLowerCase().trim();
+
+    // Check cache by resolved placeId and category first
+    const cacheKey = `resolved_${placeId}_${normCategory}`;
+    const cached = searchCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      console.log(`[Cache Hit] placeId: ${placeId} (${normCategory}) -> ${cached.places.length} places`);
+      return res.json({
+        places: cached.places,
+        requestsInStep: 0,
+        totalRequestsUsed: cached.totalRequestsUsed || 0,
+        nextCursor: null,
+        isComplete: true,
+        cached: true
+      });
+    }
+
+    let sessionId;
+    let queue = [];
+    let vp = viewport;
+
+    if (!cursor) {
+      // Start a brand new search
+      sessionId = crypto.randomBytes(8).toString('hex');
+      let wordings = [];
+      if (normCategory === 'restaurants' || normCategory === 'restaurant') {
+        wordings = [...RESTAURANT_WORDINGS];
+      } else if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels') {
+        wordings = [...STAY_WORDINGS];
+      } else {
+        wordings = [...RESTAURANT_WORDINGS, ...STAY_WORDINGS];
+      }
+
+      if (!vp || !vp.low || !vp.high) {
+        return res.status(400).json({ error: 'Valid viewport rectangle is required.' });
+      }
+
+      const initialTile = {
+        latMin: vp.low.latitude,
+        latMax: vp.high.latitude,
+        lngMin: vp.low.longitude,
+        lngMax: vp.high.longitude,
+        depth: 1
+      };
+
+      queue = wordings.map(w => ({
+        tile: initialTile,
+        wording: w,
+        pageToken: null,
+        pageIndex: 0
+      }));
+
+      searchSessionStore.set(sessionId, {
+        seenIds: new Set(),
+        places: [],
+        totalRequestsUsed: 0,
+        timestamp: Date.now()
+      });
+    } else {
+      // Resume from verified HMAC cursor
+      const payload = verifyCursor(cursor);
+      if (!payload || !payload.sessionId) {
+        return res.status(400).json({ error: 'Invalid or expired cursor.' });
+      }
+      sessionId = payload.sessionId;
+      queue = payload.queue || [];
+      vp = payload.viewport || viewport;
+
+      if (!searchSessionStore.has(sessionId)) {
+        searchSessionStore.set(sessionId, {
+          seenIds: new Set(payload.seenIds || []),
+          places: [],
+          totalRequestsUsed: payload.totalRequestsUsed || 0,
+          timestamp: Date.now()
+        });
+      }
+    }
+
+    const session = searchSessionStore.get(sessionId);
+    const MAX_STEP_REQUESTS = 15;
+    let requestsInStep = 0;
+    const newPlacesInStep = [];
+
+    // Process queue up to MAX_STEP_REQUESTS in parallel batches of up to 5
+    while (queue.length > 0 && requestsInStep < MAX_STEP_REQUESTS && session.totalRequestsUsed < SEARCH_REQUEST_CAP) {
+      const batchSize = Math.min(5, MAX_STEP_REQUESTS - requestsInStep, SEARCH_REQUEST_CAP - session.totalRequestsUsed, queue.length);
+      const currentBatch = queue.splice(0, batchSize);
+
+      const batchPromises = currentBatch.map(async (item) => {
+        try {
+          const resSingle = await googleTextSearchSingle(item.wording, item.tile, item.pageToken);
+          return { item, res: resSingle, error: null };
+        } catch (err) {
+          return { item, res: { places: [], nextPageToken: null }, error: err };
+        }
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+      requestsInStep += batchResults.length;
+      session.totalRequestsUsed += batchResults.length;
+
+      for (const { item, res: resSingle, error } of batchResults) {
+        if (error) {
+          console.warn(`[Step Request Error] "${item.wording}":`, error.message);
+          continue;
+        }
+
+        for (const gp of resSingle.places) {
+          // Keep only places whose coordinates are inside the resolved overall viewport
+          if (gp.location && vp && vp.low && vp.high) {
+            const { latitude, longitude } = gp.location;
+            if (latitude < vp.low.latitude || latitude > vp.high.latitude ||
+                longitude < vp.low.longitude || longitude > vp.high.longitude) {
+              continue;
+            }
+          }
+
+          if (gp.id && !session.seenIds.has(gp.id)) {
+            session.seenIds.add(gp.id);
+            const mapped = mapGooglePlace(gp);
+            newPlacesInStep.push(mapped);
+            session.places.push(mapped);
+          }
+        }
+
+        // Pagination: fetch up to 3 pages (pageIndex 0, 1, 2)
+        if (resSingle.nextPageToken && item.pageIndex < 2) {
+          queue.push({
+            tile: item.tile,
+            wording: item.wording,
+            pageToken: resSingle.nextPageToken,
+            pageIndex: item.pageIndex + 1
+          });
+        } else if (resSingle.nextPageToken && item.pageIndex === 2) {
+          // Reached 60-result cap for this tile and wording!
+          // If depth < 4, split tile into 4 sub-tiles and repeat
+          if (item.tile.depth < 4) {
+            const latMid = (item.tile.latMin + item.tile.latMax) / 2;
+            const lngMid = (item.tile.lngMin + item.tile.lngMax) / 2;
+            const subTiles = [
+              { latMin: latMid, latMax: item.tile.latMax, lngMin: item.tile.lngMin, lngMax: lngMid, depth: item.tile.depth + 1 },
+              { latMin: latMid, latMax: item.tile.latMax, lngMin: lngMid, lngMax: item.tile.lngMax, depth: item.tile.depth + 1 },
+              { latMin: item.tile.latMin, latMax: latMid, lngMin: item.tile.lngMin, lngMax: lngMid, depth: item.tile.depth + 1 },
+              { latMin: item.tile.latMin, latMax: latMid, lngMin: lngMid, lngMax: item.tile.lngMax, depth: item.tile.depth + 1 }
+            ];
+            for (const st of subTiles) {
+              queue.push({
+                tile: st,
+                wording: item.wording,
+                pageToken: null,
+                pageIndex: 0
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const isCapped = session.totalRequestsUsed >= SEARCH_REQUEST_CAP;
+    const isComplete = queue.length === 0 || isCapped;
+
+    if (isComplete) {
+      // Cache results by resolved placeId and category
+      searchCache.set(cacheKey, {
+        timestamp: Date.now(),
+        places: session.places,
+        totalRequestsUsed: session.totalRequestsUsed
+      });
+      searchSessionStore.delete(sessionId);
+      return res.json({
+        places: newPlacesInStep,
+        requestsInStep,
+        totalRequestsUsed: session.totalRequestsUsed,
+        nextCursor: null,
+        isComplete: true,
+        capped: isCapped
+      });
+    } else {
+      session.timestamp = Date.now();
+      const nextCursor = signCursor({
+        sessionId,
+        placeId,
+        category: normCategory,
+        viewport: vp,
+        queue,
+        seenIds: Array.from(session.seenIds).slice(0, 500),
+        totalRequestsUsed: session.totalRequestsUsed,
+        timestamp: Date.now()
+      });
+      return res.json({
+        places: newPlacesInStep,
+        requestsInStep,
+        totalRequestsUsed: session.totalRequestsUsed,
+        nextCursor,
+        isComplete: false,
+        capped: false
+      });
+    }
+  } catch (err) {
+    console.error('[Search Step Error]', err.message || err);
+    return res.status(err.status || 500).json({ error: err.message || 'Search step failed.' });
+  }
+});
+
+// ──────────────────────────────────────────────
+// POST /api/check-websites-batch (Section 3)
+// ──────────────────────────────────────────────
+app.post('/api/check-websites-batch', async (req, res) => {
+  try {
+    const { places = [] } = req.body || {};
+    if (!Array.isArray(places)) {
+      return res.status(400).json({ error: 'places array is required.' });
+    }
+    const tasks = places.map(p => async () => {
+      try {
+        const resolved = await resolveWebsiteStatus(p);
+        return {
+          id: p.id,
+          websiteStatus: resolved.websiteStatus,
+          finalWebsiteUri: resolved.finalWebsiteUri,
+          socialPlatform: resolved.socialPlatform,
+          website: resolved.website
+        };
+      } catch {
+        return {
+          id: p.id,
+          websiteStatus: 'Not listed',
+          finalWebsiteUri: p.websiteUri || null,
+          socialPlatform: null,
+          website: p.website || 'Not available'
+        };
+      }
+    });
+    const results = await runInBatches(tasks, 10, 50);
+    return res.json({ results });
+  } catch (err) {
+    console.error('[Check Websites Batch Error]', err.message || err);
+    return res.status(500).json({ error: 'Failed to check websites.' });
+  }
+});
+
+// ──────────────────────────────────────────────
+// Main Search Handler (kept for backward compatibility & TomTom)
 // ──────────────────────────────────────────────
 async function handleSearch(req, res) {
   try {
@@ -865,274 +1267,159 @@ async function handleSearch(req, res) {
     const source = (req.method === 'GET' ? req.query.source : req.body.source) || 'google';
 
     const trimmedLoc = location.trim();
-    if (!trimmedLoc) return res.status(400).json({ error: 'Location query is required' });
+    if (!trimmedLoc) return res.status(400).json({ error: 'Location query is required.' });
 
     const normCategory = category.toLowerCase().trim();
-    const normSource = source.toLowerCase().trim(); // 'google' or 'tomtom'
-    const cacheKey = `${trimmedLoc.toLowerCase()}:${normCategory}:${normSource}`;
-
-    // Check cache
-    const cached = searchCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
-      console.log(`[Cache Hit] Query: "${trimmedLoc}" | Category: ${normCategory} | Source: ${normSource} | Total: ${cached.data.length}`);
-      return res.json({ cached: true, location: trimmedLoc, category: normCategory, source: normSource, total: cached.data.length, results: cached.data });
-    }
-
-    let places = [];
-    let usedSource = normSource;
-    let coverageReport = null;
-
-    // ── Google Places path ──
-    if (normSource === 'google') {
-      try {
-        const area = (req.body?.area || req.query?.area || 'small').toLowerCase();
-        let radiusMeters = 3000;
-
-        // Resolve location center coordinates
-        const center = await resolveLocationCenter(trimmedLoc);
-
-        // Grid cells for multi-cell search
-        let gridCells = center ? [center] : [];
-        if (center) {
-          if (area === 'medium') {
-            radiusMeters = 6000;
-            const offset = 0.025;
-            gridCells = [
-              { lat: center.lat - offset, lon: center.lon - offset },
-              { lat: center.lat - offset, lon: center.lon + offset },
-              { lat: center.lat + offset, lon: center.lon - offset },
-              { lat: center.lat + offset, lon: center.lon + offset }
-            ];
-          } else if (area === 'large') {
-            radiusMeters = 12000;
-            gridCells = [];
-            [-0.05, 0, 0.05].forEach(dLat => {
-              [-0.05, 0, 0.05].forEach(dLon => {
-                gridCells.push({ lat: center.lat + dLat, lon: center.lon + dLon });
-              });
-            });
-          } else if (area === 'city') {
-            radiusMeters = 16000;
-            gridCells = [];
-            [-0.075, -0.025, 0.025, 0.075].forEach(dLat => {
-              [-0.075, -0.025, 0.025, 0.075].forEach(dLon => {
-                gridCells.push({ lat: center.lat + dLat, lon: center.lon + dLon });
-              });
-            });
-          }
-        }
-
-        // Build list of queries
-        const queries = [];
-        if (normCategory === 'restaurants' || normCategory === 'restaurant') {
-          RESTAURANT_WORDINGS.forEach(w => queries.push({ type: 'Restaurant', wording: w, query: `${w} in ${trimmedLoc}` }));
-        } else if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels') {
-          STAY_WORDINGS.forEach(w => queries.push({ type: 'Stay', wording: w, query: `${w} in ${trimmedLoc}` }));
-        } else {
-          RESTAURANT_WORDINGS.forEach(w => queries.push({ type: 'Restaurant', wording: w, query: `${w} in ${trimmedLoc}` }));
-          STAY_WORDINGS.forEach(w => queries.push({ type: 'Stay', wording: w, query: `${w} in ${trimmedLoc}` }));
-        }
-
-        // Nearby searches per grid cell
-        const nearbyTasks = [];
-        if (gridCells.length > 0) {
-          const cellsToSearch = gridCells.slice(0, 16);
-          const cellRadius = area === 'small' ? 3000 : (area === 'medium' ? 3000 : 4000);
-          for (let i = 0; i < cellsToSearch.length; i++) {
-            const cell = cellsToSearch[i];
-            const cellTag = cellsToSearch.length > 1 ? ` cell ${i + 1}/${cellsToSearch.length}` : '';
-            if (normCategory === 'restaurants' || normCategory === 'restaurant' || normCategory === 'both') {
-              nearbyTasks.push({ cell, radius: cellRadius, type: 'Restaurant', rank: 'DISTANCE', types: RESTAURANT_NEARBY_TYPES, label: `Nearby restaurants (Distance${cellTag})` });
-              if (cellsToSearch.length <= 4) {
-                nearbyTasks.push({ cell, radius: cellRadius, type: 'Restaurant', rank: 'POPULARITY', types: RESTAURANT_NEARBY_TYPES, label: `Nearby restaurants (Popularity${cellTag})` });
-              }
-            }
-            if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels' || normCategory === 'both') {
-              nearbyTasks.push({ cell, radius: cellRadius, type: 'Stay', rank: 'DISTANCE', types: STAY_NEARBY_TYPES, label: `Nearby stays (Distance${cellTag})` });
-              if (cellsToSearch.length <= 4) {
-                nearbyTasks.push({ cell, radius: cellRadius, type: 'Stay', rank: 'POPULARITY', types: STAY_NEARBY_TYPES, label: `Nearby stays (Popularity${cellTag})` });
-              }
-            }
-          }
-        }
-
-        // Cost guard check & 150 hard stop (Section 4)
-        const pagesPerQuery = gridCells.length > 4 ? 1 : (gridCells.length > 1 ? 2 : 3);
-        const maxEstimatedRequests = 1 + (queries.length * pagesPerQuery) + nearbyTasks.length;
-        if (maxEstimatedRequests > 150) {
-          return res.status(400).json({
-            error: `Hard-stop: This search may use up to ${maxEstimatedRequests} Google requests, which exceeds the limit of 150 requests per search. Please select a specific category or reduce search area.`
-          });
-        }
-        checkDailyLimit(maxEstimatedRequests);
-
-        // Location restriction rectangle covering entire search area
-        let locationRestriction = null;
-        if (center) {
-          const latDelta = radiusMeters / 111320;
-          const lonDelta = radiusMeters / (111320 * Math.cos(center.lat * Math.PI / 180));
-          locationRestriction = {
-            rectangle: {
-              low: { latitude: center.lat - latDelta, longitude: center.lon - lonDelta },
-              high: { latitude: center.lat + latDelta, longitude: center.lon + lonDelta }
-            }
-          };
-        }
-
-        const seenPlaceIds = new Set();
-        const mergedPlaces = [];
-        const queryReports = [];
-        let totalPermanentlyClosed = 0;
-
-        function recordPlaces(queryLabel, rawGooglePlaces, placeType, closedCount = 0) {
-          totalPermanentlyClosed += closedCount;
-          let newCount = 0;
-          for (const gp of rawGooglePlaces) {
-            const pId = gp.id;
-            if (pId) {
-              if (seenPlaceIds.has(pId)) continue;
-              seenPlaceIds.add(pId);
-            }
-            newCount++;
-            mergedPlaces.push(mapGooglePlace(gp, placeType));
-          }
-          queryReports.push({
-            query: queryLabel,
-            found: rawGooglePlaces.length,
-            newCount
-          });
-        }
-
-        // Execute text search queries in batches of 5 with 150ms delay
-        const textTasks = queries.map(q => async () => {
-          try {
-            const res = await googleTextSearch(q.query, locationRestriction, pagesPerQuery);
-            return { q, res: res.places, closedCount: res.closedCount };
-          } catch (err) {
-            console.warn(`[Text Search Warning] "${q.query}":`, err.message);
-            return { q, res: [], closedCount: 0 };
-          }
-        });
-
-        const textResults = await runInBatches(textTasks, 5, 150);
-        for (const item of textResults) {
-          recordPlaces(item.q.query, item.res, item.q.type, item.closedCount);
-        }
-
-        // Execute nearby searches across grid cells
-        if (nearbyTasks.length > 0) {
-          const nbTasks = nearbyTasks.map(nb => async () => {
-            try {
-              const res = await googleNearbySearch(nb.cell, nb.radius, nb.types, nb.rank);
-              return { nb, res: res.places, closedCount: res.closedCount };
-            } catch (err) {
-              console.warn(`[Nearby Search Warning] "${nb.label}":`, err.message);
-              return { nb, res: [], closedCount: 0 };
-            }
-          });
-          const nbResults = await runInBatches(nbTasks, 5, 150);
-          for (const item of nbResults) {
-            recordPlaces(item.nb.label, item.res, item.nb.type, item.closedCount);
-          }
-        }
-
-        places = mergedPlaces;
-        usedSource = 'google';
-        coverageReport = {
-          total: places.length,
-          queryCount: queryReports.length,
-          hiddenClosedCount: totalPermanentlyClosed,
-          area,
-          gridCellCount: gridCells.length,
-          queries: queryReports
-        };
-      } catch (gErr) {
-        // If Google fails with key/quota error, surface it clearly and suggest TomTom
-        console.error('[Google Search Error]', gErr.code || gErr.status, gErr.message);
-        return res.status(gErr.status || 500).json({
-          error: gErr.message,
-          code: gErr.code || 'GOOGLE_ERROR',
-          suggestFallback: true,
-          fallbackSource: 'tomtom'
-        });
-      }
-    }
+    const normSource = source.toLowerCase().trim();
 
     // ── TomTom path ──
     if (normSource === 'tomtom') {
       try {
         const position = await geocodeLocationTomTom(trimmedLoc);
-        if (!position) return res.status(404).json({ error: 'Location not found. Please verify the place name and try again.' });
-
-        const radiusSteps = [2000, 5000, 10000];
-        let rawResults = [];
-
-        for (const r of radiusSteps) {
-          let restR = [], stayR = [];
-          if (normCategory === 'restaurants' || normCategory === 'restaurant') {
-            restR = await fetchTomTomPois(position.lat, position.lon, r, '7315', 'restaurant');
-          } else if (normCategory === 'stays' || normCategory === 'stay' || normCategory === 'hotels') {
-            stayR = await fetchTomTomPois(position.lat, position.lon, r, '7314', 'hotel');
-          } else {
-            [restR, stayR] = await Promise.all([
-              fetchTomTomPois(position.lat, position.lon, r, '7315', 'restaurant'),
-              fetchTomTomPois(position.lat, position.lon, r, '7314', 'hotel')
-            ]);
-          }
-          const marked = [
-            ...restR.map(i => ({ ...i, _computedType: 'Restaurant' })),
-            ...stayR.map(i => ({ ...i, _computedType: 'Stay' }))
-          ];
-          rawResults = marked;
-          if (rawResults.length >= 5) break;
-        }
-
-        // Deduplicate TomTom results
-        const seenMap = new Map();
+        if (!position) return res.status(404).json({ error: 'Location not found in TomTom.' });
+        const [restR, stayR] = await Promise.all([
+          fetchTomTomPois(position.lat, position.lon, 5000, '7315', 'restaurant'),
+          fetchTomTomPois(position.lat, position.lon, 5000, '7314', 'hotel')
+        ]);
+        const rawResults = [
+          ...restR.map(i => ({ ...i, _computedType: 'Restaurant' })),
+          ...stayR.map(i => ({ ...i, _computedType: 'Stay' }))
+        ];
         const deduped = [];
+        const seen = new Set();
         for (const item of rawResults) {
-          const key = `${(item.poi?.name || '').toLowerCase()}|${(item.address?.freeformAddress || '').toLowerCase()}`;
-          if (!seenMap.has(key)) { seenMap.set(key, true); deduped.push(item); }
+          const k = (item.poi?.name || '') + '|' + (item.address?.freeformAddress || '');
+          if (!seen.has(k)) { seen.add(k); deduped.push(item); }
         }
-
-        places = deduped.map(mapTomTomPlace);
-        usedSource = 'tomtom';
-        coverageReport = {
-          total: places.length,
-          queryCount: 1,
-          queries: [{ query: `TomTom POI Search in ${trimmedLoc}`, found: places.length, newCount: places.length }]
-        };
+        const mapped = deduped.map(mapTomTomPlace);
+        const checked = await Promise.all(mapped.map(resolveWebsiteStatus));
+        return res.json({
+          cached: false,
+          location: trimmedLoc,
+          category: normCategory,
+          source: 'tomtom',
+          total: checked.length,
+          results: checked
+        });
       } catch (ttErr) {
-        console.error('[TomTom Search Error]', ttErr.message);
         return res.status(ttErr.status || 500).json({ error: ttErr.message });
       }
     }
 
-    // Parallel website status checks
-    const checkedPlaces = await Promise.all(places.map(resolveWebsiteStatus));
+    // ── Google Places path ──
+    const locRes = await resolveLocation(trimmedLoc);
+    if (locRes.status === 'ambiguous') {
+      return res.json({ status: 'ambiguous', candidates: locRes.candidates, typedText: trimmedLoc });
+    }
 
-    // Stats
-    const phoneCount = checkedPlaces.filter(p => p.phone !== 'Not available').length;
-    const websiteCount = checkedPlaces.filter(p => p.website !== 'Not available' && !p.socialPlatform).length;
+    const area = locRes.area;
+    const cacheKey = `resolved_${area.placeId}_${normCategory}`;
+    const cached = searchCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return res.json({
+        cached: true,
+        location: area.name,
+        category: normCategory,
+        source: 'google',
+        total: cached.places.length,
+        results: cached.places,
+        totalRequestsUsed: cached.totalRequestsUsed || 0
+      });
+    }
 
-    searchCache.set(cacheKey, { timestamp: Date.now(), data: checkedPlaces, coverageReport });
-    console.log(`[Search] "${trimmedLoc}" | ${normCategory} | ${usedSource} | ${checkedPlaces.length} results | ${phoneCount} phone | ${websiteCount} website`);
+    // Perform search across tiles until complete
+    let cursor = null;
+    const collectedPlaces = [];
+    let finalRequests = 0;
+
+    while (true) {
+      // Internal step call
+      const stepRes = await (async () => {
+        const bodyObj = { placeId: area.placeId, category: normCategory, viewport: area.viewport, cursor };
+        const mockRes = {
+          _data: null,
+          status: function() { return this; },
+          json: function(d) { this._data = d; return this; }
+        };
+        // Reuse logic by executing steps
+        let sId = cursor ? verifyCursor(cursor)?.sessionId : null;
+        let q = [];
+        if (!cursor) {
+          sId = crypto.randomBytes(8).toString('hex');
+          const words = normCategory === 'restaurants' ? RESTAURANT_WORDINGS : normCategory === 'stays' ? STAY_WORDINGS : [...RESTAURANT_WORDINGS, ...STAY_WORDINGS];
+          const it = { latMin: area.viewport.low.latitude, latMax: area.viewport.high.latitude, lngMin: area.viewport.low.longitude, lngMax: area.viewport.high.longitude, depth: 1 };
+          q = words.map(w => ({ tile: it, wording: w, pageToken: null, pageIndex: 0 }));
+          searchSessionStore.set(sId, { seenIds: new Set(), places: [], totalRequestsUsed: 0, timestamp: Date.now() });
+        } else {
+          const payload = verifyCursor(cursor);
+          sId = payload.sessionId;
+          q = payload.queue || [];
+        }
+
+        const sess = searchSessionStore.get(sId);
+        let reqs = 0;
+        const newPl = [];
+
+        while (q.length > 0 && reqs < 15 && sess.totalRequestsUsed < SEARCH_REQUEST_CAP) {
+          const bSize = Math.min(5, 15 - reqs, SEARCH_REQUEST_CAP - sess.totalRequestsUsed, q.length);
+          const cBatch = q.splice(0, bSize);
+          const bResults = await Promise.all(cBatch.map(async (item) => {
+            try {
+              const r = await googleTextSearchSingle(item.wording, item.tile, item.pageToken);
+              return { item, res: r };
+            } catch {
+              return { item, res: { places: [], nextPageToken: null } };
+            }
+          }));
+          reqs += bResults.length;
+          sess.totalRequestsUsed += bResults.length;
+
+          for (const { item, res: r } of bResults) {
+            for (const gp of r.places) {
+              if (gp.id && !sess.seenIds.has(gp.id)) {
+                sess.seenIds.add(gp.id);
+                const m = mapGooglePlace(gp);
+                newPl.push(m);
+                sess.places.push(m);
+              }
+            }
+            if (r.nextPageToken && item.pageIndex < 2) {
+              q.push({ tile: item.tile, wording: item.wording, pageToken: r.nextPageToken, pageIndex: item.pageIndex + 1 });
+            }
+          }
+        }
+
+        const comp = q.length === 0 || sess.totalRequestsUsed >= SEARCH_REQUEST_CAP;
+        if (comp) {
+          searchSessionStore.delete(sId);
+          return { places: newPl, isComplete: true, totalRequestsUsed: sess.totalRequestsUsed, nextCursor: null };
+        } else {
+          const nextCur = signCursor({ sessionId: sId, placeId: area.placeId, category: normCategory, viewport: area.viewport, queue: q, totalRequestsUsed: sess.totalRequestsUsed });
+          return { places: newPl, isComplete: false, totalRequestsUsed: sess.totalRequestsUsed, nextCursor: nextCur };
+        }
+      })();
+
+      collectedPlaces.push(...stepRes.places);
+      finalRequests = stepRes.totalRequestsUsed;
+      if (stepRes.isComplete) break;
+      cursor = stepRes.nextCursor;
+    }
+
+    const checked = await Promise.all(collectedPlaces.map(resolveWebsiteStatus));
+    searchCache.set(cacheKey, { timestamp: Date.now(), places: checked, totalRequestsUsed: finalRequests });
 
     return res.json({
       cached: false,
-      location: trimmedLoc,
+      location: area.name,
       category: normCategory,
-      source: usedSource,
-      total: checkedPlaces.length,
-      phoneCount,
-      websiteCount,
-      coverageReport,
-      results: checkedPlaces
+      source: 'google',
+      total: checked.length,
+      results: checked,
+      totalRequestsUsed: finalRequests
     });
-
   } catch (err) {
     console.error('[Search Error]', err.message || err);
-    return res.status(err.status || 500).json({ error: err.message || 'An unexpected error occurred.' });
+    return res.status(err.status || 500).json({ error: err.message || 'Search failed.' });
   }
 }
 
@@ -1140,7 +1427,7 @@ app.get('/api/search', handleSearch);
 app.post('/api/search', handleSearch);
 
 // ──────────────────────────────────────────────
-// POST /api/search-single — Add missing place search (Section 2)
+// POST /api/search-single (Kept for unit tests)
 // ──────────────────────────────────────────────
 app.post('/api/search-single', async (req, res) => {
   try {
@@ -1152,10 +1439,28 @@ app.post('/api/search-single', async (req, res) => {
     const query = loc ? `${name.trim()} in ${loc}` : name.trim();
 
     checkDailyLimit(1);
-    const searchRes = await googleTextSearch(query, null, 1);
-    const places = (searchRes.places || []).map(gp => mapGooglePlace(gp));
+    const searchRes = await queryGoogleArea(query);
+    let places = [];
+    if (searchRes && searchRes.length > 0) {
+      places = searchRes.map(gp => mapGooglePlace(gp));
+    } else {
+      const url = 'https://places.googleapis.com/v1/places:searchText';
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_KEY,
+          'X-Goog-FieldMask': GOOGLE_SEARCH_FIELD_MASK
+        },
+        body: JSON.stringify({ textQuery: query, pageSize: 5 })
+      });
+      incrementDailyCounter(1);
+      if (r.ok) {
+        const d = await r.json();
+        places = (d.places || []).map(gp => mapGooglePlace(gp));
+      }
+    }
     const resolvedPlaces = await Promise.all(places.map(p => resolveWebsiteStatus(p)));
-
     return res.json({ places: resolvedPlaces });
   } catch (err) {
     console.error('[Search Single Error]', err.message || err);

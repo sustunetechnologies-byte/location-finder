@@ -54,18 +54,6 @@
         </div>
 
         <div class="form-group select-group">
-          <label for="area-select">Search Area</label>
-          <div class="select-wrapper">
-            <select id="area-select">
-              <option value="small" selected>Small (3 km)</option>
-              <option value="medium">Medium (6 km, 4 cells)</option>
-              <option value="large">Large (12 km, 9 cells)</option>
-              <option value="city">City-wide (16 cells)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="form-group select-group">
           <label for="source-select">Data Source</label>
           <div class="select-wrapper">
             <select id="source-select">
@@ -95,37 +83,40 @@
       </form>
     </section>
 
-    <!-- Search by Name Section (Sec4) -->
-    <section class="search-by-name-card" id="search-by-name-section">
-      <div class="search-by-name-header">
-        <h3 class="search-by-name-title">🔎 Search by Business Name</h3>
-        <p class="subtext">Find a specific place by name and city/town (e.g. "Hotel Hanumanthu" in "Mysuru") and add it to the table.</p>
+    <!-- Did You Mean Selection Card (Section 2) -->
+    <section id="did-you-mean-card" class="did-you-mean-card hidden">
+      <div class="did-you-mean-header">
+        <span class="did-you-mean-icon">📍</span>
+        <div>
+          <h3 class="did-you-mean-title">Did you mean...?</h3>
+          <p class="did-you-mean-sub" id="did-you-mean-sub">Multiple areas found with this name. Select your intended destination:</p>
+        </div>
       </div>
-      <form id="search-by-name-form" class="search-by-name-form">
-        <div class="form-group flex-grow">
-          <label for="name-query-input">Business Name</label>
-          <input type="text" id="name-query-input" placeholder="e.g. Hotel Hanumanthu" required autocomplete="off">
-        </div>
-        <div class="form-group" style="min-width:180px;">
-          <label for="name-town-input">City / Town</label>
-          <input type="text" id="name-town-input" placeholder="e.g. Mysuru" required autocomplete="off">
-        </div>
-        <div class="form-group" style="align-self:flex-end;">
-          <button type="submit" id="btn-name-search" class="btn btn-secondary" style="height:48px;">
-            <span>Search Google</span>
-          </button>
-        </div>
-      </form>
-      <div id="name-search-results" class="name-search-results hidden"></div>
+      <div id="did-you-mean-list" class="did-you-mean-list"></div>
     </section>
 
     <!-- Main Results Container -->
     <main class="results-card">
+      <!-- Location Resolution Banner (Section 2) -->
+      <div id="location-banner" class="location-banner hidden">
+        <span class="loc-pin-icon">📍</span>
+        <span id="loc-banner-text" class="loc-banner-text"></span>
+      </div>
+
+      <!-- Live Search Progress Bar (Section 3) -->
+      <div id="search-progress-card" class="search-progress-card hidden">
+        <div class="search-progress-bar"><div id="search-progress-fill" class="search-progress-fill" style="width: 0%;"></div></div>
+        <div class="search-progress-info">
+          <span id="search-progress-text" class="search-progress-text">Searching... 0 places found</span>
+          <span id="search-progress-requests" class="search-progress-requests"></span>
+        </div>
+      </div>
+
       <!-- Loading State -->
       <div id="loading-state" class="state-container hidden">
         <div class="spinner"></div>
-        <p id="loading-text" class="state-text">Searching nearby places and checking website health...</p>
-        <span class="subtext">Running multiple queries for better coverage, this takes a few seconds...</span>
+        <p id="loading-text" class="state-text">Searching places across the whole city...</p>
+        <span class="subtext">Resolving location and discovering places...</span>
       </div>
 
       <!-- Error State -->
@@ -156,7 +147,7 @@
           </svg>
         </div>
         <h3>Discover Places &amp; Website Status</h3>
-        <p>Enter a neighborhood or city to discover nearby places. Google Places is the default data source; switch to TomTom as a fallback.</p>
+        <p>Enter any town or city to automatically search the entire area. Google Places is the default data source.</p>
       </div>
 
       <!-- Empty Search Results State -->
@@ -168,7 +159,7 @@
           </svg>
         </div>
         <h3>No places found</h3>
-        <p>No places found. Try a larger area or a different name.</p>
+        <p>No places found. Try another city or town name.</p>
       </div>
 
       <!-- Data Section -->
@@ -188,24 +179,6 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             </a>
             <button type="button" id="preview-alert-close" class="preview-alert-dismiss" title="Dismiss">&times;</button>
-          </div>
-        </div>
-
-        <!-- Coverage Report Panel (Sec2) -->
-        <div id="coverage-panel" class="coverage-panel hidden">
-          <div class="coverage-header">
-            <h3 class="coverage-title">🔍 Search Coverage Report</h3>
-          </div>
-          <div id="coverage-content" class="coverage-content"></div>
-          <!-- Add Missing Place (Sec2) -->
-          <div id="add-missing-section" class="add-missing-section hidden">
-            <h4 class="add-missing-title">Add Missing Place</h4>
-            <p class="modal-hint">If a place is missing from the results, search for it here and add it to the table.</p>
-            <div class="add-missing-row">
-              <input type="text" id="add-missing-name" class="modal-input" placeholder="Business name (e.g. Hotel Sunrise, Kumta)">
-              <button type="button" id="add-missing-search" class="btn btn-sm btn-secondary">Search &amp; Add</button>
-            </div>
-            <div id="add-missing-results" class="add-missing-results"></div>
           </div>
         </div>
 
@@ -243,7 +216,7 @@
           </div>
         </div>
 
-        <!-- Table -->
+        <!-- Table Container (Section 5) -->
         <div class="table-container">
           <table class="places-table">
             <thead>
@@ -257,8 +230,7 @@
                 <th data-sort="websiteStatus" class="sortable col-status">Website Status <span class="sort-icon">↕</span></th>
                 <th class="col-hours">Opening Hours</th>
                 <th class="col-map">Map</th>
-                <th class="col-spacer" aria-hidden="true"></th>
-                <th class="col-action">Action</th>
+                <th class="col-action">Actions</th>
               </tr>
             </thead>
             <tbody id="places-tbody">
@@ -266,6 +238,19 @@
             </tbody>
           </table>
         </div>
+
+        <!-- Pagination Controls (Section 4) -->
+        <div id="pagination-wrapper" class="pagination-wrapper hidden">
+          <div id="pagination-summary" class="pagination-summary">Showing 0 of 0 places</div>
+          <div id="pagination-controls" class="pagination-controls">
+            <button type="button" id="btn-prev-page" class="btn-page" disabled>&larr; Previous</button>
+            <div id="pagination-pages" class="pagination-pages"></div>
+            <button type="button" id="btn-next-page" class="btn-page" disabled>Next &rarr;</button>
+          </div>
+        </div>
+
+        <!-- Small line showing requests used (Section 3) -->
+        <div id="requests-used-line" class="requests-used-line hidden"></div>
       </div>
     </main>
 

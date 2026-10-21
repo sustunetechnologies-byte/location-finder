@@ -4,179 +4,185 @@ A full-stack Node.js + Express web application that discovers hospitality busine
 
 ---
 
-## 🌟 Key Features & Implementation Details (Sections 1 – 5)
+## 🌟 Architecture & Features (Sections 1 – 8)
 
-### 1. Table Layout: No Horizontal Scrolling for Actions (Section 1)
-- **Sticky Columns with Solid Backgrounds**:
-  - **Name Column** is sticky on the left edge (`left: 0`).
-  - **Action Column** (Generate Website, Details, Refresh) is sticky on the right edge (`right: 0`).
-  - Solid background colors prevent content from showing through during scrolling (`#1F2937` on table headers, `var(--bg-card)` on table cells).
-- **Narrow & Compact Layout**:
-  - Truncated addresses (`.address-cell`) with ellipsis and full address in tooltip and Details drawer.
-  - Compact opening hours (`.hours-compact`): displays "Today: 10:00 AM–10:00 PM" with the full 7-day schedule visible in a hover tooltip.
-  - Rating and review count combined in a single narrow column (`4.2 ★ (120)`).
-  - Compact phone number and map link columns.
-- **Mobile Card Layout (under 900 px)**:
-  - Automatically switches each place into a responsive card layout displaying name, type, phone, rating, website status, and action buttons.
-  - `overflow-x: hidden !important` eliminates horizontal scrolling completely.
-- **Filters & Excel Export**:
-  - Keeps sorting, category filters, website status filters, and Excel export intact.
+### 1. Streamlined Search Interface (Section 1)
+- **Simplified Controls**: The search bar contains only 4 essential controls:
+  - **Location**: City or town name input with automatic resolution.
+  - **Category**: Restaurants, Stays, or Both.
+  - **Data source**: Google Places or TomTom.
+  - Two search buttons: **"Search Places"** and **"Search Places (without website)"**.
+- **Removed Distractions**: Removed legacy business name search, manual "add missing place" box, search radius selectors (Small/Medium/Large/City-wide), confirmation alert dialogs, and sticky table columns.
 
 ---
 
-### 2. Warning Icon Logic (Section 2)
-- **Exact Warning Criteria**:
-  - **Amber "Verify" Warnings**:
+### 2. Location Resolution: Any Spelling Gives the Same Results (Section 2)
+- **Places Text Search (New) Resolution**: Before searching for businesses, the typed location is resolved with Google Places Text Search (New) with `regionCode: "IN"`, `languageCode: "en"`, `pageSize: 5`, and area filtering.
+- **Area-Only Matching**: Accepts only geographical administrative areas (`locality`, `sublocality`, `neighbourhood`, `administrative_area_level_2/3`, `colloquial_area`, `postal_code`, `political`). Businesses with similar names are ignored.
+- **Multi-Level Fallback**:
+  1. Searches typed text.
+  2. If no area found, retries with `", India"` appended.
+  3. If still nothing found, checks `aliases.json`.
+- **Ambiguous Resolution ("Did you mean...?")**:
+  - If several plausible areas with different place IDs are returned (e.g. "Aurangabad" in Maharashtra vs Bihar), a *"Did you mean...?"* prompt displays up to 5 candidates (name, district, and state) for the user to choose.
+  - The selection is remembered for that typed text in `sessionStorage` for the entire session.
+- **Shared Cache & Banner**:
+  - Displays above the table: `"Showing results for {official name}, {state}"` and `"You typed: {typed text}"` if they differ.
+  - Results are cached by the resolved place ID and category, ensuring that searching "Mysore" and "Mysuru" share the identical cache and return identical results.
+- **Alias Management (`aliases.json`)**:
+  - Contains 27+ historical and alternate spellings (e.g., Mysore/Mysuru, Bangalore/Bengaluru, Mangalore/Mangaluru, Kumata/Kumta, Bombay/Mumbai, Madras/Chennai, Poona/Pune, etc.).
+  - Whenever typed text and resolved name differ, it is logged to the server console (without keys).
+  - **How to add more aliases**: Add a key-value pair to `aliases.json`:
+    ```json
+    {
+      "old_or_alternate_spelling": "Official Google Name"
+    }
+    ```
+
+---
+
+### 3. Automatic City-Wide Search & Vercel Stepped Execution (Section 3)
+- **Automatic City-Wide Coverage**: Searching a city returns places for the whole city automatically.
+- **Viewport Bounds Filtering**: Uses the resolved area viewport as a `locationRestriction` rectangle. The typed city name is not appended to the place queries.
+- **Adaptive Tiling**:
+  - Starts with the whole viewport as tile depth 0.
+  - Runs Text Search with category wordings:
+    - **Restaurants**: `restaurant`, `cafe`, `bakery`, `fast food`, `dhaba`, `mess`, `tiffin`, `biryani`.
+    - **Stays**: `hotel`, `lodge`, `guest house`, `homestay`, `resort`, `PG hostel`, `service apartment`.
+  - Up to 3 pages fetched with `nextPageToken`.
+  - When a tile and wording reach the 60-result cap, it automatically splits the tile into 4 sub-tiles and repeats recursively up to depth 4.
+- **Vercel Timeout Mitigation (`POST /api/search/step`)**:
+  - The search executes in short steps initiated by the frontend.
+  - Each step makes at most 15 Google Places requests, run 5 at a time, finishing in under 8 seconds to stay safely within Vercel's serverless function timeout limits.
+  - Returns new places and an HMAC-SHA256 signed cursor (`SEARCH_SECRET`) preventing client tampering.
+  - Handles HTTP 429 rate limits with exponential backoff and retries.
+- **Live Progress & Background Health Checks**:
+  - Progress bar shows live count: *"Searching... 142 places found"*.
+  - Places are rendered immediately on the screen as they arrive in each step.
+  - Website status checks and shortener redirection run in the background via `POST /api/check-websites-batch`, updating each row as checks finish.
+- **Cost Safety Limits**:
+  - `SEARCH_REQUEST_CAP` (default 300) per search stops the search safely if reached, displaying *"Search stopped at the request limit, results may be incomplete"*.
+  - `DAILY_REQUEST_CAP` (default 1500) provides a daily best-effort safety counter.
+  - Displays requests used: `"Used 118 Google requests"`.
+
+---
+
+### 4. Pagination & Complete Excel Export (Section 4)
+- **Client-Side Pagination**:
+  - Displays 20 places per page.
+  - Previous / Next buttons and page numbers with ellipsis.
+  - Summary label: `"Showing 21 to 40 of 361"`.
+  - Table scrolls smoothly to the top whenever the page changes.
+  - Sorting and filters apply to the entire dataset before paging; changing filters or sorting resets to page 1.
+- **Excel Export**:
+  - Exports **ALL** rows matching current filters (across every page).
+  - Includes: Name, Type, Address, Phone, Rating, Website, Website Status, Opening Hours, Map Link, Business Status, Place ID, Google Types, and Date Fetched.
+
+---
+
+### 5. Table Layout That Fits the Screen (Section 5)
+- **Screens >= 1280 px**:
+  - `table-layout: fixed; width: 100%;` inside a container (`max-width: 1600px`).
+  - All 10 columns are fully visible with **zero horizontal scrolling**:
+    - **Name**: 16% (clamped to 2 lines)
+    - **Type**: 7%
+    - **Address**: 17% (2-line clamp with full tooltip and Details drawer access)
+    - **Phone**: 11% (formatted as `+91 XXXXX XXXXX` or `+91 80 XXXX XXXX`, `white-space: nowrap`, actionable `tel:` links)
+    - **Rating**: 7% (e.g. `4.2 (605)` on one line)
+    - **Website**: 12% (1-line ellipsis with hover tooltip)
+    - **Website Status**: 8%
+    - **Opening Hours**: 10% (`Today: 10 AM - 10 PM` with full 7-day schedule in tooltip)
+    - **Map**: 4% (compact icon button with tooltip)
+    - **Actions**: 8% (compact "Generate" button or disabled "Has website" button, plus Details `ℹ` and Refresh `↻` icons)
+- **Screens < 1100 px**:
+  - Switches automatically to a clean card layout per place with zero horizontal scrolling.
+
+---
+
+### 6. Warnings, URL Shorteners & Details Drawer (Section 6)
+- **Focused Warning Icon**:
+  - **Never warns about missing website** (missing website is the intended target).
+  - Warns strictly for:
     1. Missing phone number.
-    2. Phone not in valid Indian 10-digit mobile/landline format.
+    2. Invalid phone format (not standard 10-digit Indian number).
     3. Missing opening hours.
-    4. Business marked `CLOSED_TEMPORARILY` on Google Maps.
-    5. Name contains a phone number or promotional text (e.g., `"call 80882..."`).
-    6. Address is missing a 6-digit postal pincode.
-  - **Grey "Info" Flag**:
-    - No rating or reviews on Google.
-  - **No Warning for Missing Website**:
-    - Finding places without websites is the core objective of the tool, so missing websites are never flagged as warnings.
-- **Interactive Warning Popover**:
-  - Hover, click, or keyboard focus opens an accessible popover detailing each verification issue and info item.
-- **Legend & Filter**:
-  - Legend added above the results table: `⚠ = data to verify before generating`.
-  - Filter checkbox: **"Hide places with warnings"**.
+    4. Business marked `CLOSED_TEMPORARILY`.
+    5. Name contains phone number or promotional wording.
+    6. Address missing a 6-digit postal pincode.
+- **URL Shortener Resolution**:
+  - Server follows shorteners (`cutt.ly`, `bit.ly`, `tinyurl.com`, `rb.gy`, `t.co`, `goo.gl`, `linktr.ee`, etc.) up to 5 redirects with a 5-second timeout.
+  - If destination is social/listing (Instagram, Facebook, Zomato, Swiggy, JustDial), marks row as `"No own website"` and shows platform name.
+- **Details Drawer**:
+  - Shows Google's `primaryType` and all `types`.
+  - Includes an interactive **Reclassify** dropdown (Restaurant / Stay) that updates the row, the website generator, and Excel export.
+- **Review Window**:
+  - Shows `"No photos found on this place's Google pin"` only when Google returns zero photos.
+  - **"+ Add photo"** button is always accessible.
 
 ---
 
-### 3. Review Window: Editable Fields & Photo Uploads (Section 3)
-- **Zero-Photo Messaging**:
-  - Shows `"No photos found on this place's Google pin. You can upload owner-provided photos below."` when Google returns zero photos.
-- **Editable Fields with Mandatory Verification**:
-  - **Display Name**: Editable, displays original Google name alongside it.
-  - **Phone Number**: Editable in `+91` format.
-  - **WhatsApp Number**: Editable with Indian mobile validation.
-  - **Opening Hours**: Editable custom hours text (verification checkbox only appears when text is entered).
-  - **Short Description**: Editable editorial summary.
-  - Each field has a required **"Verified"** checkbox. "Generate Website" remains disabled until all active fields are confirmed.
-- **Phone Number in Name Detection**:
-  - If a phone number or promo text is detected in the Google name, a banner suggests a cleaned business name and offers to automatically move the extracted number into the Phone field (requires confirmation).
-- **Owner-Provided Photo Uploads**:
-  - **"+ Add photo" button** is always accessible, even when Google returns 0 photos.
-  - Supported formats: **JPEG, PNG, WebP** (max 5 MB each).
-  - Resized client-side to max 1600 px via HTML5 Canvas with EXIF metadata stripped.
-  - Total photo count capped at 12 photos (Google + uploaded photos combined).
-  - Mandatory permission checkbox: *"This photo was provided by the owner or taken by us, and is used with the owner's permission."*
-  - Marked with an **"Owner-provided"** badge with no Google Maps Contributor attribution.
-  - Includes a **Delete** action for uploads.
-  - **Existing photo picker selection logic preserved**: removed photos are never used; if any are ticked only those are used; if none are ticked all non-removed photos are used.
+## 🔑 Environment Variables Setup
 
----
+Configure the following variables in your local `.env` and in your **Vercel Project Settings** (**Settings → Environment Variables**):
 
-### 4. Coverage for Big Cities & Search by Name (Section 4)
+| Variable | Required? | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `GOOGLE_PLACES_API_KEY` | **Yes** | — | Google Places API (New) key with Text Search, Place Details, and Photos enabled. |
+| `TOMTOM_API_KEY` | Optional | — | TomTom Search API key for fallback search. |
+| `SEARCH_SECRET` | **Yes** | `location_finder_secret_key` | Secret key used to sign and verify HMAC cursors between stepped search calls. |
+| `SEARCH_REQUEST_CAP` | Optional | `300` | Maximum Google API requests permitted per search session. |
+| `DAILY_REQUEST_CAP` | Optional | `1500` | Daily request quota safety ceiling. |
+| `BLOB_READ_WRITE_TOKEN` | Recommended (Vercel) | — | Token from Vercel Blob store for persistent owner photo uploads. |
+| `PORT` | Optional | `3000` | Local server port. |
 
-#### Root Cause Analysis: Why "Hotel Hanumanthu" in Mysuru Was Missing
-1. **Type Classification**: Google Places returns types `['chicken_restaurant', 'south_indian_restaurant', 'hotel', 'indian_restaurant', 'lodging', 'restaurant', ...]`. In India, "Hotel" often refers to a restaurant. The legacy system classified any place with "hotel" or "lodging" as a Stay. Because queries were filtered by category, it was misclassified or filtered out.
-2. **Missing `primaryType`**: The legacy API calls omitted Google's `primaryType` field mask. Google Places (New) explicitly provides `primaryType: "restaurant"`.
-3. **Query Wordings**: Food queries lacked typical Indian non-veg/military hotel wordings like `"biryani"`, `"mess"`, `"military hotel"`, `"meals"`, `"tiffin"`.
-4. **Search Radius**: Hotel Hanumanthu is located in Mandi Mohalla, Mysuru. A single 3 km radius from the city center did not cover all commercial dining clusters.
-
-#### Fixes Implemented:
-- Classify places using Google's `primaryType` first, checking restaurant types before stay types.
-- Expanded food queries: `"family restaurant"`, `"mess"`, `"tiffin"`, `"biryani"`, `"meals"`, `"military hotel"`, `"darshini"`, `"hotel"`.
-- Expanded stay queries: `"lodge"`, `"dormitory"`, `"service apartment"`.
-- **Search Area Selector**:
-  - **Small (3 km)**: Single center query.
-  - **Medium (6 km)**: 4-cell spatial grid.
-  - **Large (12 km)**: 9-cell spatial grid.
-  - **City-wide**: Up to 16-cell spatial grid with progressive batching (5 requests per batch with 150 ms delays).
-- **Search by Name Box**:
-  - Search any business name + town (e.g., `"Hotel Hanumanthu, Mysuru"`).
-  - Preview name, address, types, and operational status.
-  - Add the chosen place directly into the table with all standard columns and actions.
-- **Coverage & Safety Guards**:
-  - Hard stop above 150 requests per search.
-  - Confirmation prompt displaying the estimated request count before running large searches.
-  - Daily request counter refuses searches beyond 400 requests/day.
-  - Coverage report displays permanently closed counts (e.g., *"3 permanently closed places hidden"*).
-
----
-
-## ☁️ External Object Storage Setup (Vercel Blob)
-
-For production deployment on Vercel (where the server filesystem is read-only and ephemeral), photo uploads are stored in **Vercel Blob**.
-
-### Environment Variables Required
-In your Vercel Project Settings (under **Settings → Environment Variables**), add:
-
+### Example `.env` file:
 ```env
-BLOB_READ_WRITE_TOKEN=vercel_blob_rw_****************************
+GOOGLE_PLACES_API_KEY=AIzaSy...
+TOMTOM_API_KEY=your_tomtom_key_optional
+SEARCH_SECRET=my_ultra_secure_hmac_secret_2026
+SEARCH_REQUEST_CAP=300
+DAILY_REQUEST_CAP=1500
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
+PORT=3000
 ```
 
-### How to Get Your Token:
-1. Log in to the [Vercel Dashboard](https://vercel.com).
-2. Go to your project and click the **Storage** tab.
-3. Click **Create Database** and select **Blob**.
-4. Choose a database name and region, then click **Create**.
-5. Go to the **Quickstart** or **Settings** tab and copy `BLOB_READ_WRITE_TOKEN`.
-6. Add it to your project's Environment Variables for Production, Preview, and Development.
+---
 
-### Local Development Fallback:
-If `BLOB_READ_WRITE_TOKEN` is not set (e.g., during local testing), the app automatically falls back to an **in-memory object storage** with random unguessable IDs served via `/api/uploaded-photo/:id` with automatic 30-day time-to-live cleanup.
+## ☁️ Deploying to Vercel
+
+1. **Push repository to GitHub**:
+   ```bash
+   git add .
+   git commit -m "Complete Location Finder v2 updates (Sections 1-8)"
+   git push origin main
+   ```
+2. **Connect to Vercel**:
+   - Import your GitHub repository in the Vercel Dashboard.
+   - Framework Preset: **Other** (Express / Node.js).
+3. **Add Environment Variables in Vercel**:
+   - Go to **Project Settings → Environment Variables**.
+   - Add:
+     - `GOOGLE_PLACES_API_KEY`
+     - `SEARCH_SECRET`
+     - `SEARCH_REQUEST_CAP` (e.g. `300`)
+     - `DAILY_REQUEST_CAP` (e.g. `1500`)
+     - `BLOB_READ_WRITE_TOKEN` (Create from Vercel Storage → Blob)
+     - `TOMTOM_API_KEY` (if used)
+4. **Deploy**:
+   - The stepped architecture (`/api/search/step`) ensures each step runs within 2–4 seconds, well under the Vercel Hobby 10s serverless timeout.
 
 ---
 
-## 🚀 Recent Improvements (Table Layout, Phone Formatting, Shortlinks & Classification)
+## 🧪 Testing Suites
 
-### 1. Column Layout & Reserved Action Spacing
-- **Spacer Column (`.col-spacer`)**: Added an explicit reserved width spacer (185px) matching the width of the sticky Action column (`right: 0`). This ensures horizontal table scrolling never obscures the **Opening Hours** or **Map Link** columns.
-- **Two-Line Opening Hours (`.hours-two-line`)**: Formats opening hours into two clean lines (Day on line 1, e.g. `TODAY`, time on line 2, e.g. `10:00 AM–10:00 PM`) for optimal vertical alignment and readability without truncation.
-- **Dedicated Map Icon Button (`.btn-map-icon`)**: Replaced raw text links with a compact, accessible icon button featuring a map pin SVG and a descriptive tooltip (`"Open in Google Maps"`).
-- **Responsive Layout**: Tested across viewports (1366px, 1024px, 768px, and 390px). On mobile screens (under 900px), cleanly switches to a stacked card layout with zero horizontal overflow.
-
-### 2. Standardized Indian Phone Formatting
-- **Mobile Numbers**: Formatted as `+91 XXXXX XXXXX` on a single line (`white-space: nowrap !important`) without altering digits returned by Google.
-- **Landlines**: Formatted with standard STD codes (e.g. `+91 80 XXXX XXXX` for 2-digit STD codes like Bengaluru or `+91 821 XXX XXXX` for 3-digit STD codes like Mysuru).
-- **Actionable `tel:` Links**: Formatted cleanly as `tel:+91XXXXXXXXXX` (no spaces or hyphens).
-- **Universal Consistency**: Applied uniformly across the Table view, Details drawer, and Excel export.
-
-### 3. URL Shortener Resolution & Platform Detection
-- **Server-Side Redirect Following**: Server follows URL shorteners (`cutt.ly`, `bit.ly`, `tinyurl.com`, `rb.gy`, `t.co`, `goo.gl`, `linktr.ee`, etc.) up to 5 hops with a 5-second timeout.
-- **Final URL Resolution**: Uses the final destination address for website health checks and displays both the original and resolved URLs in the Details drawer.
-- **Social & Listing Platform Flagging**: If the resolved destination is a social or listing platform (e.g., Instagram, Facebook, Sitch, Zomato, Swiggy, JustDial), the status is accurately marked as **"No own website"** and displays the detected platform badge.
-
-### 4. Classification Check & Interactive Reclassify
-- **Type Transparency**: Details drawer displays both the Google `primaryType` and all associated Google `types`.
-- **Interactive Reclassify**: Provides a "Reclassify" dropdown (`Restaurant` / `Stay`) with a **"↺ Reset to Google"** button. The chosen classification dynamically overrides the row badge, feeds into the **Generate Website** pipeline, and persists in the Excel export.
-
-### 5. Mysuru Verification
-- Fully verified with Mysuru test locations:
-  - **Hithie - The Gourmet Dining**: Follows short link `https://cutt.ly/Hithie` to final destination `https://sitch.app/hithie`, correctly flags as `"No own website"` (`[Sitch]`), and formats phone as `+91 70909 00663`.
-  - **Hideaway Coffee**: Follows Instagram presence and flags as `"No own website"` (`[Instagram]`).
-  - **Harish Bakery**: Correctly displays mobile number as `+91 94489 38572` and website status as `"Not listed"`.
-
----
-
-## 🛠️ Automated Testing
-
-Run the automated test suites:
-
+Run tests locally:
 ```bash
-# New fixes test suite (Layout, Phone, Shortlinks, Classification, Mysuru checks)
-node test_new_fixes.js
+# Test all 27 alias pairs and ambiguous location resolution
+node test_resolve_suite.js
 
-# Full test suite covering Sections 1 through 5
-node test_suite_sections_1_to_5.js
+# Test stepped search, Mysore vs Mysuru parity, Excel export, and website previews
+node test_section7_flows.js
 
-# Viewport responsiveness (1366px, 1024px, 768px, 390px) & warning rules
-node test_viewport_and_warnings.js
-
-# Legacy section test suite
-node test_sections_1_2_3.js
+# Test small town (Kumta) vs big city (Bengaluru) adaptive search
+node test_town_and_city.js
 ```
-
----
-
-## 💻 Tech Stack
-- **Backend**: Node.js, Express
-- **Cloud Storage**: `@vercel/blob` (Vercel Blob)
-- **APIs**: Google Places (New) API, TomTom Search API
-- **Export**: ExcelJS
-- **Frontend**: Vanilla HTML5, CSS3, Vanilla JavaScript (zero external CDN or framework dependencies)
-- **Deployment**: Vercel-ready with stateless preview generation and proxy routing.

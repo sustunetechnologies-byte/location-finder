@@ -3,7 +3,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchForm = document.getElementById('search-form');
   const locationInput = document.getElementById('location-input');
   const categorySelect = document.getElementById('category-select');
-  const areaSelect = document.getElementById('area-select');
   const sourceSelect = document.getElementById('source-select');
   const searchBtn = document.getElementById('search-btn');
   const searchNoWebsiteBtn = document.getElementById('search-no-website-btn');
@@ -28,18 +27,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const previewAlertMessage = document.getElementById('preview-alert-message');
   const previewAlertLink = document.getElementById('preview-alert-link');
   const previewAlertClose = document.getElementById('preview-alert-close');
-  // Sec2 & Sec4 - coverage panel & search by name
-  const coveragePanel = document.getElementById('coverage-panel');
-  const coverageContent = document.getElementById('coverage-content');
-  const addMissingSection = document.getElementById('add-missing-section');
-  const addMissingName = document.getElementById('add-missing-name');
-  const addMissingSearchBtn = document.getElementById('add-missing-search');
-  const addMissingResults = document.getElementById('add-missing-results');
-  const searchByNameForm = document.getElementById('search-by-name-form');
-  const nameQueryInput = document.getElementById('name-query-input');
-  const nameTownInput = document.getElementById('name-town-input');
-  const btnNameSearch = document.getElementById('btn-name-search');
-  const nameSearchResults = document.getElementById('name-search-results');
+  // Section 2: Did you mean & Location Banner
+  const didYouMeanCard = document.getElementById('did-you-mean-card');
+  const didYouMeanList = document.getElementById('did-you-mean-list');
+  const locationBanner = document.getElementById('location-banner');
+  const locBannerText = document.getElementById('loc-banner-text');
+  // Section 3: Live Search Progress & Requests Used
+  const searchProgressCard = document.getElementById('search-progress-card');
+  const searchProgressFill = document.getElementById('search-progress-fill');
+  const searchProgressText = document.getElementById('search-progress-text');
+  const requestsUsedLine = document.getElementById('requests-used-line');
+  // Section 4: Pagination Controls
+  const paginationWrapper = document.getElementById('pagination-wrapper');
+  const paginationSummary = document.getElementById('pagination-summary');
+  const btnPrevPage = document.getElementById('btn-prev-page');
+  const paginationPages = document.getElementById('pagination-pages');
+  const btnNextPage = document.getElementById('btn-next-page');
   // Modal
   const enrichModal = document.getElementById('enrich-modal');
   const modalClose = document.getElementById('modal-close');
@@ -191,6 +194,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let filterMode = 'all';
   let sortColumn = 'name';
   let sortDirection = 'asc';
+  let currentPage = 1;
+  const PAGE_SIZE = 20;
+  let currentResolvedArea = null;
   let modalPlace = null;
   let modalEnriched = null;
   let userItems = [];
@@ -205,10 +211,27 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Event Listeners ──
   searchForm.addEventListener('submit', handleSearchSubmit);
   searchNoWebsiteBtn.addEventListener('click', handleSearchNoWebsiteClick);
-  activeOnlyCheckbox.addEventListener('change', () => { filterMode='all'; renderTableAndSummary(); });
-  hideWarningsCheckbox?.addEventListener('change', () => { renderTableAndSummary(); });
+  activeOnlyCheckbox.addEventListener('change', () => { filterMode='all'; currentPage = 1; renderTableAndSummary(); });
+  hideWarningsCheckbox?.addEventListener('change', () => { currentPage = 1; renderTableAndSummary(); });
   downloadExcelBtn.addEventListener('click', handleExcelDownload);
   previewAlertClose?.addEventListener('click', () => previewAlert.classList.add('hidden'));
+
+  btnPrevPage?.addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage--;
+      renderTableAndSummary();
+      scrollTableToTop();
+    }
+  });
+  btnNextPage?.addEventListener('click', () => {
+    const all = getFilteredAndSortedPlaces();
+    const totalPages = Math.ceil(all.length / PAGE_SIZE) || 1;
+    if (currentPage < totalPages) {
+      currentPage++;
+      renderTableAndSummary();
+      scrollTableToTop();
+    }
+  });
 
   designSelect?.addEventListener('change', () => {
     if (!designAutoInfo) return;
@@ -229,6 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const colKey = th.getAttribute('data-sort');
       if (sortColumn===colKey) { sortDirection = sortDirection==='asc'?'desc':'asc'; }
       else { sortColumn=colKey; sortDirection='asc'; }
+      currentPage = 1;
       updateSortHeaderIcons(); renderTableAndSummary();
     });
   });
@@ -258,12 +282,9 @@ document.addEventListener('DOMContentLoaded', () => {
   permCheckbox?.addEventListener('change', () => { if (permConfirmBtn) permConfirmBtn.disabled = !permCheckbox.checked; });
   permConfirmBtn?.addEventListener('click', handlePhotoUploadConfirm);
 
-  // Sec4 Search by name event
-  searchByNameForm?.addEventListener('submit', handleSearchByNameSubmit);
-
   // Photo picker toolbar
-  btnSelectAll?.addEventListener('click', () => { photoPickerState.forEach(p=>{ if(!p.removed) p.kept=true; }); renderPhotoAssignment(); });
-  btnClearSelection?.addEventListener('click', () => { photoPickerState.forEach(p=>{ p.kept=false; }); renderPhotoAssignment(); });
+  btnSelectAll?.addEventListener('click', () => { photoPickerState.forEach(p => { if (!p.removed) p.kept = true; }); renderPhotoAssignment(); });
+  btnClearSelection?.addEventListener('click', () => { photoPickerState.forEach(p => { p.kept = false; }); renderPhotoAssignment(); });
   btnRemoveUnselected?.addEventListener('click', () => {
     photoPickerState.forEach(p => { if (!p.kept && !p.removed) p.removed = true; });
     renderPhotoAssignment();
@@ -287,184 +308,288 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   detailsDrawerClose?.addEventListener('click', () => detailsDrawer?.classList.add('hidden'));
-  addMissingSearchBtn?.addEventListener('click', handleAddMissingSearch);
 
-  // ── Search ──
-  async function handleSearchSubmit(e) { if(e) e.preventDefault(); filterMode='all'; currentSource=sourceSelect.value; await executeSearch(); }
+  function scrollTableToTop() {
+    const el = document.querySelector('.table-container') || resultsWrapper;
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ── Search & Resolution ──
+  async function handleSearchSubmit(e) {
+    if (e) e.preventDefault();
+    filterMode = 'all';
+    currentPage = 1;
+    currentSource = sourceSelect.value;
+    await executeSearch();
+  }
 
   async function handleSearchNoWebsiteClick() {
     const query = locationInput.value.trim();
     if (!query) { locationInput.focus(); return; }
     filterMode = 'no-website';
+    currentPage = 1;
     activeOnlyCheckbox.checked = false;
     currentSource = sourceSelect.value;
-    if (rawPlaces.length>0 && query.toLowerCase()===currentSearchQuery.toLowerCase() && categorySelect.value===currentCategory && sourceSelect.value===currentSource) {
-      renderTableAndSummary(); return;
+    if (rawPlaces.length > 0 && query.toLowerCase() === currentSearchQuery.toLowerCase() && categorySelect.value === currentCategory && sourceSelect.value === currentSource) {
+      renderTableAndSummary();
+      return;
     }
     await executeSearch();
   }
 
   async function executeSearch() {
-    const query=locationInput.value.trim(), category=categorySelect.value, source=sourceSelect.value;
-    const area = areaSelect ? areaSelect.value : 'small';
+    const query = locationInput.value.trim();
+    const category = categorySelect.value;
+    const source = sourceSelect.value;
     if (!query) return;
 
-    if (source === 'google' && typeof window !== 'undefined' && !window.__SKIP_SEARCH_CONFIRM) {
-      let maxRequests = 62;
-      if (area === 'medium') maxRequests = 95;
-      else if (area === 'large') maxRequests = 130;
-      else if (area === 'city') maxRequests = 150;
-      const proceed = window.confirm(`This search (${area}) may use up to ${maxRequests} Google requests. Continue?`);
-      if (!proceed) return;
-    }
+    currentSearchQuery = query;
+    currentCategory = category;
+    currentSource = source;
+    currentPage = 1;
 
-    currentSearchQuery=query; currentCategory=category; currentSource=source;
-    showState('loading'); setButtonsDisabled(true); fallbackBanner.classList.add('hidden');
-    if (coveragePanel) coveragePanel.classList.add('hidden');
-    try {
-      const resp = await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:query,category,source,area})});
-      const data = await resp.json();
-      if (!resp.ok) {
-        if (data.suggestFallback && source==='google') {
-          errorTitle.textContent='Google Places Error'; errorMessage.textContent=data.error||'Google Places failed.';
-          fallbackMsg.textContent='Would you like to switch to TomTom and retry?'; fallbackBanner.classList.remove('hidden'); showState('error');
-        } else throw new Error(data.error||'Failed to fetch results.');
-        return;
-      }
-      rawPlaces = data.results||[];
-      cacheBadge.classList.toggle('hidden',!data.cached);
-      sourceBadge.textContent = data.source==='google'?'Google Places':'TomTom';
-      sourceBadge.className = 'badge ' + (data.source==='google'?'badge-google':'badge-tomtom');
-      sourceBadge.classList.remove('hidden');
-      if (data.coverageReport && coveragePanel && coverageContent) { renderCoverageReport(data.coverageReport); coveragePanel.classList.remove('hidden'); }
-      if (rawPlaces.length===0) showState('empty');
-      else { showState('results'); renderTableAndSummary(); }
-    } catch(err) {
-      console.error('[Client Search Error]',err);
-      errorTitle.textContent='Unable to complete search'; errorMessage.textContent=err.message||'An error occurred.'; showState('error');
-    } finally { setButtonsDisabled(false); }
-  }
+    // Reset UI banners & cards
+    if (didYouMeanCard) didYouMeanCard.classList.add('hidden');
+    if (locationBanner) locationBanner.classList.add('hidden');
+    if (requestsUsedLine) requestsUsedLine.classList.add('hidden');
+    fallbackBanner?.classList.add('hidden');
 
-  function renderCoverageReport(report) {
-    if (!coverageContent) return;
-    let html = '<div class="coverage-report"><div class="coverage-summary">Found <strong>' + report.total + '</strong> unique places from <strong>' + report.queryCount + '</strong> queries.';
-    if (report.hiddenClosedCount && report.hiddenClosedCount > 0) {
-      html += ' <span style="color:#FBBF24;margin-left:0.5rem;font-size:0.85rem;">(' + report.hiddenClosedCount + ' permanently closed places hidden)</span>';
-    }
-    html += '</div>';
-    if (report.queries && report.queries.length) {
-      html += '<div class="coverage-queries">';
-      report.queries.forEach(q => { html += '<div class="coverage-query-row"><span class="coverage-query-text">' + escapeHtml(q.query) + '</span><span class="coverage-query-count">' + q.found + ' found, ' + q.newCount + ' new</span></div>'; });
-      html += '</div>';
-    }
-    html += '</div>';
-    coverageContent.innerHTML = html;
-    if (addMissingSection) addMissingSection.classList.remove('hidden');
-  }
-
-  async function handleSearchByNameSubmit(e) {
-    if (e) e.preventDefault();
-    const name = nameQueryInput?.value?.trim();
-    const town = nameTownInput?.value?.trim();
-    if (!name || !town) return;
-
-    if (btnNameSearch) {
-      btnNameSearch.disabled = true;
-      btnNameSearch.querySelector('span').textContent = 'Searching…';
-    }
-    nameSearchResults.classList.remove('hidden');
-    nameSearchResults.innerHTML = '<span class="text-muted">Searching Google Places…</span>';
-
-    try {
-      const resp = await fetch('/api/search-single', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, location: town })
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Search failed');
-      const places = data.places || [];
-      if (places.length === 0) {
-        nameSearchResults.innerHTML = '<span class="text-muted">No places found matching "' + escapeHtml(name) + '" in ' + escapeHtml(town) + '.</span>';
-        return;
-      }
-
-      nameSearchResults.innerHTML = places.map((p, idx) => {
-        const typesStr = Array.isArray(p.types) ? p.types.slice(0, 3).join(', ') : (p.types || '');
-        const bStatus = (p.businessStatus || 'OPERATIONAL').replace(/_/g, ' ');
-        return '<div class="name-result-card">' +
-          '<div class="name-result-info">' +
-            '<span class="name-result-title">' + escapeHtml(p.name) + '</span>' +
-            '<span class="text-muted" style="font-size:0.8rem;">📍 ' + escapeHtml(p.address) + '</span>' +
-            '<div class="name-result-meta">' +
-              '<span class="name-result-type-badge">' + escapeHtml(p.type) + '</span>' +
-              (typesStr ? '<span>' + escapeHtml(typesStr) + '</span>' : '') +
-              '<span style="color:' + (p.businessStatus === 'OPERATIONAL' ? '#34D399' : '#FBBF24') + '">' + escapeHtml(bStatus) + '</span>' +
-            '</div>' +
-          '</div>' +
-          '<button type="button" class="btn btn-sm btn-primary btn-add-name-result" data-idx="' + idx + '">+ Add to Table</button>' +
-        '</div>';
-      }).join('');
-
-      nameSearchResults.querySelectorAll('.btn-add-name-result').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const idx = parseInt(btn.dataset.idx, 10);
-          const chosen = places[idx];
-          if (!chosen) return;
-          if (rawPlaces.some(p => p.placeId && p.placeId === chosen.placeId)) {
-            btn.textContent = 'Already in table';
-            btn.disabled = true;
-            return;
-          }
-          rawPlaces.unshift(chosen);
+    if (source === 'tomtom') {
+      showState('loading');
+      setButtonsDisabled(true);
+      try {
+        const resp = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ location: query, category, source: 'tomtom' })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'TomTom search failed.');
+        rawPlaces = data.results || [];
+        cacheBadge.classList.toggle('hidden', !data.cached);
+        sourceBadge.textContent = 'TomTom';
+        sourceBadge.className = 'badge badge-tomtom';
+        sourceBadge.classList.remove('hidden');
+        if (rawPlaces.length === 0) showState('empty');
+        else {
           showState('results');
           renderTableAndSummary();
-          btn.textContent = '✓ Added!';
-          btn.disabled = true;
-        });
-      });
-    } catch (err) {
-      nameSearchResults.innerHTML = '<span style="color:#F87171">Search error: ' + escapeHtml(err.message) + '</span>';
-    } finally {
-      if (btnNameSearch) {
-        btnNameSearch.disabled = false;
-        btnNameSearch.querySelector('span').textContent = 'Search Google';
+          triggerBackgroundWebsiteCheck(rawPlaces);
+        }
+      } catch (err) {
+        console.error('[TomTom Search Error]', err);
+        errorTitle.textContent = 'Unable to complete search';
+        errorMessage.textContent = err.message || 'An error occurred.';
+        showState('error');
+      } finally {
+        setButtonsDisabled(false);
       }
+      return;
+    }
+
+    // Google Places Search with Location Resolution (Section 2 & Section 3)
+    showState('loading');
+    setButtonsDisabled(true);
+
+    try {
+      const sessionKey = 'loc_res_' + query.toLowerCase();
+      const cachedChoice = sessionStorage.getItem(sessionKey);
+      if (cachedChoice) {
+        const area = JSON.parse(cachedChoice);
+        await runCityWideSearch(area, query, category);
+        return;
+      }
+
+      // Step 1: Resolve location
+      const resResp = await fetch('/api/resolve-location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location: query })
+      });
+      const resData = await resResp.json();
+      if (!resResp.ok) throw new Error(resData.error || 'Failed to resolve location.');
+
+      if (resData.status === 'ambiguous') {
+        showDidYouMeanPrompt(resData.candidates, query, category);
+        showState('initial');
+        setButtonsDisabled(false);
+        return;
+      }
+
+      // Exact single area resolved
+      const area = resData.area;
+      sessionStorage.setItem(sessionKey, JSON.stringify(area));
+      await runCityWideSearch(area, query, category);
+    } catch (err) {
+      console.error('[Location Search Error]', err);
+      errorTitle.textContent = 'Unable to complete search';
+      errorMessage.textContent = err.message || 'An error occurred.';
+      if (sourceSelect.value === 'google') {
+        fallbackMsg.textContent = 'Would you like to switch to TomTom and retry?';
+        fallbackBanner.classList.remove('hidden');
+      }
+      showState('error');
+    } finally {
+      setButtonsDisabled(false);
     }
   }
 
-  async function handleAddMissingSearch() {
-    const name = addMissingName?.value?.trim();
-    if (!name||!currentSearchQuery) return;
-    addMissingSearchBtn.disabled=true; addMissingSearchBtn.textContent='Searching…';
-    if (addMissingResults) addMissingResults.innerHTML='<span class="text-muted">Searching Google…</span>';
-    try {
-      const resp=await fetch('/api/search-single',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,location:currentSearchQuery})});
-      const data=await resp.json();
-      if (!resp.ok) throw new Error(data.error||'Search failed');
-      if (!data.places||data.places.length===0) {
-        addMissingResults.innerHTML='<div class="missing-no-result">No match found on Google. <button type="button" class="btn-add-manual" id="btn-add-manual">Add manually</button></div>';
-        document.getElementById('btn-add-manual')?.addEventListener('click',()=>{
-          const mp={id:'manual_'+Date.now(),placeId:null,source:'manual',name,type:currentCategory==='stays'?'Stay':'Restaurant',address:currentSearchQuery,phone:'Not available',website:'Not available',websiteUri:null,socialPlatform:null,openingHours:'Not available',mapLink:'Not available',rating:'Not available',reviewCount:'Not available',coordinates:null,businessStatus:'OPERATIONAL',websiteStatus:'Not listed',addedManually:true};
-          rawPlaces.push(mp); renderTableAndSummary();
-          addMissingResults.innerHTML='<span style="color:#34D399">✓ Added manually: '+escapeHtml(name)+'</span>';
-          if(addMissingName) addMissingName.value='';
-        });
-        return;
-      }
-      addMissingResults.innerHTML=data.places.map((p,i)=>'<div class="missing-result-row"><div class="missing-result-info"><strong>'+escapeHtml(p.name)+'</strong><span class="text-muted" style="font-size:0.8rem">'+escapeHtml(p.address)+'</span></div><button type="button" class="btn-add-this btn-sm btn-primary" data-idx="'+i+'">+ Add</button></div>').join('');
-      addMissingResults.querySelectorAll('.btn-add-this').forEach(btn=>{
-        btn.addEventListener('click',()=>{
-          const idx=parseInt(btn.dataset.idx,10), place=data.places[idx];
-          if (rawPlaces.some(p=>p.placeId&&p.placeId===place.placeId)) { addMissingResults.innerHTML='<span style="color:#FBBF24">⚠ Already in results</span>'; return; }
-          rawPlaces.push(place); renderTableAndSummary();
-          addMissingResults.innerHTML='<span style="color:#34D399">✓ Added: '+escapeHtml(place.name)+'</span>';
-          if(addMissingName) addMissingName.value='';
-        });
+  function showDidYouMeanPrompt(candidates, query, category) {
+    if (!didYouMeanCard || !didYouMeanList) return;
+    const sessionKey = 'loc_res_' + query.toLowerCase();
+    didYouMeanList.innerHTML = '';
+    candidates.forEach(c => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn-dym-choice';
+      const label = c.name + (c.district ? ', ' + c.district : '') + (c.state ? ', ' + c.state : '');
+      btn.textContent = label;
+      btn.addEventListener('click', async () => {
+        sessionStorage.setItem(sessionKey, JSON.stringify(c));
+        didYouMeanCard.classList.add('hidden');
+        setButtonsDisabled(true);
+        try {
+          await runCityWideSearch(c, query, category);
+        } catch (err) {
+          console.error('[DYM Search Error]', err);
+          errorTitle.textContent = 'Unable to complete search';
+          errorMessage.textContent = err.message || 'An error occurred.';
+          showState('error');
+        } finally {
+          setButtonsDisabled(false);
+        }
       });
-    } catch(err) {
-      if(addMissingResults) addMissingResults.innerHTML='<span style="color:#F87171">Error: '+escapeHtml(err.message)+'</span>';
-    } finally { addMissingSearchBtn.disabled=false; addMissingSearchBtn.textContent='Search & Add'; }
+      didYouMeanList.appendChild(btn);
+    });
+    didYouMeanCard.classList.remove('hidden');
+  }
+
+  async function runCityWideSearch(area, typedQuery, category) {
+    currentResolvedArea = area;
+
+    // Show Location Resolution Banner (Section 2)
+    if (locationBanner && locBannerText) {
+      const isDiff = area.name.toLowerCase() !== typedQuery.toLowerCase();
+      locBannerText.innerHTML = 'Showing results for <strong>' + escapeHtml(area.name) + (area.state ? ', ' + escapeHtml(area.state) : '') + '</strong>' +
+        (isDiff ? ' <span class="loc-banner-typed" style="margin-left:0.5rem;color:var(--text-muted);font-size:0.85rem;">(You typed: <em>' + escapeHtml(typedQuery) + '</em>)</span>' : '');
+      locationBanner.classList.remove('hidden');
+    }
+
+    rawPlaces = [];
+    currentPage = 1;
+    showState('results');
+
+    // Show live progress bar (Section 3)
+    if (searchProgressCard && searchProgressFill && searchProgressText) {
+      searchProgressCard.classList.remove('hidden');
+      searchProgressFill.style.width = '10%';
+      searchProgressText.textContent = 'Searching... 0 places found';
+    }
+    if (requestsUsedLine) requestsUsedLine.classList.add('hidden');
+
+    sourceBadge.textContent = 'Google Places';
+    sourceBadge.className = 'badge badge-google';
+    sourceBadge.classList.remove('hidden');
+    cacheBadge.classList.add('hidden');
+
+    let cursor = null;
+    let totalRequestsUsed = 0;
+    let isComplete = false;
+    let stepCount = 0;
+    let isCapped = false;
+
+    while (!isComplete) {
+      const resp = await fetch('/api/search/step', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location: typedQuery,
+          category,
+          placeId: area.placeId,
+          viewport: area.viewport,
+          cursor
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        if (data.code === 'DAILY_LIMIT_EXCEEDED' || resp.status === 429) {
+          throw new Error(data.error || data.message || 'Daily Google Places request limit reached.');
+        }
+        throw new Error(data.error || 'Failed to search places.');
+      }
+
+      totalRequestsUsed = data.totalRequestsUsed || 0;
+      isCapped = !!data.capped;
+
+      if (data.places && data.places.length > 0) {
+        rawPlaces.push(...data.places);
+        renderTableAndSummary();
+        triggerBackgroundWebsiteCheck(data.places);
+      }
+
+      cursor = data.nextCursor;
+      isComplete = data.isComplete || !cursor;
+      stepCount++;
+
+      const pct = isComplete ? 100 : Math.min(95, 15 + stepCount * 18);
+      if (searchProgressFill) searchProgressFill.style.width = pct + '%';
+      if (searchProgressText) {
+        if (isComplete) {
+          searchProgressText.textContent = (isCapped ? 'Search stopped at the request limit, results may be incomplete. ' : 'Complete! ') + rawPlaces.length + ' places found';
+        } else {
+          searchProgressText.textContent = 'Searching... ' + rawPlaces.length + ' places found';
+        }
+      }
+    }
+
+    // Small line after each search ("Used 118 Google requests")
+    if (requestsUsedLine) {
+      requestsUsedLine.textContent = 'Used ' + totalRequestsUsed + ' Google requests';
+      requestsUsedLine.classList.remove('hidden');
+    }
+
+    if (rawPlaces.length === 0) {
+      showState('empty');
+    } else {
+      renderTableAndSummary();
+    }
+  }
+
+  // Background website status checks (Section 3)
+  const checkedWebsitesSet = new Set();
+  async function triggerBackgroundWebsiteCheck(placesList) {
+    const toCheck = placesList.filter(p => p.websiteUri && !checkedWebsitesSet.has(p.id));
+    if (toCheck.length === 0) return;
+    toCheck.forEach(p => checkedWebsitesSet.add(p.id));
+
+    const chunkSize = 10;
+    for (let i = 0; i < toCheck.length; i += chunkSize) {
+      const chunk = toCheck.slice(i, i + chunkSize);
+      fetch('/api/check-websites-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ places: chunk })
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (!res || !Array.isArray(res.results)) return;
+        let changed = false;
+        res.results.forEach(item => {
+          const target = rawPlaces.find(p => p.id === item.id);
+          if (target) {
+            target.websiteStatus = item.websiteStatus;
+            target.finalWebsiteUri = item.finalWebsiteUri;
+            target.socialPlatform = item.socialPlatform;
+            target.website = item.website;
+            changed = true;
+          }
+        });
+        if (changed) {
+          renderTableAndSummary();
+        }
+      })
+      .catch(err => console.warn('[Background Website Check Error]', err.message));
+    }
   }
 
   function setButtonsDisabled(d) { searchBtn.disabled=d; searchNoWebsiteBtn.disabled=d; }
@@ -673,7 +798,32 @@ document.addEventListener('DOMContentLoaded', () => {
     return filtered;
   }
 
-  // ── Table Render ──
+  function getPaginationPageNumbers(current, total) {
+    if (total <= 7) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+    const pages = [];
+    if (current <= 4) {
+      for (let i = 1; i <= 5; i++) pages.push(i);
+      pages.push('...');
+      pages.push(total);
+    } else if (current >= total - 3) {
+      pages.push(1);
+      pages.push('...');
+      for (let i = total - 4; i <= total; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      pages.push('...');
+      pages.push(current - 1);
+      pages.push(current);
+      pages.push(current + 1);
+      pages.push('...');
+      pages.push(total);
+    }
+    return pages;
+  }
+
+  // ── Table Render (Section 4 & Section 5) ──
   function renderTableAndSummary() {
     const disp = getFilteredAndSortedPlaces();
     const total = disp.length;
@@ -685,13 +835,59 @@ document.addEventListener('DOMContentLoaded', () => {
     else summaryLine.textContent = total + ' places found: ' + phoneCount + ' with phone, ' + webCount + ' with active website';
 
     downloadExcelBtn.disabled = total === 0;
+
+    const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
+    const startIndex = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE;
+    const endIndex = Math.min(startIndex + PAGE_SIZE, total);
+    const pagePlaces = disp.slice(startIndex, endIndex);
+
+    if (paginationWrapper) {
+      if (total <= PAGE_SIZE) {
+        paginationWrapper.classList.add('hidden');
+      } else {
+        paginationWrapper.classList.remove('hidden');
+        if (paginationSummary) {
+          paginationSummary.textContent = `Showing ${startIndex + 1} to ${endIndex} of ${total}`;
+        }
+        if (btnPrevPage) btnPrevPage.disabled = currentPage <= 1;
+        if (btnNextPage) btnNextPage.disabled = currentPage >= totalPages;
+
+        if (paginationPages) {
+          paginationPages.innerHTML = '';
+          const pages = getPaginationPageNumbers(currentPage, totalPages);
+          pages.forEach(p => {
+            if (p === '...') {
+              const span = document.createElement('span');
+              span.className = 'pagination-ellipsis';
+              span.textContent = '…';
+              paginationPages.appendChild(span);
+            } else {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'btn-page' + (p === currentPage ? ' active' : '');
+              btn.textContent = String(p);
+              btn.addEventListener('click', () => {
+                currentPage = p;
+                renderTableAndSummary();
+                scrollTableToTop();
+              });
+              paginationPages.appendChild(btn);
+            }
+          });
+        }
+      }
+    }
+
     placesTbody.innerHTML = '';
     if (total === 0) {
-      placesTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);">No places match the selected filter.</td></tr>';
+      placesTbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);">No places match the selected filter.</td></tr>';
       return;
     }
 
-    disp.forEach(place => {
+    pagePlaces.forEach(place => {
       const tr = document.createElement('tr');
       const typeBadge = '<span class="badge ' + (place.type === 'Stay' ? 'badge-stay' : 'badge-restaurant') + '">' + escapeHtml(place.type) + '</span>';
       
@@ -710,16 +906,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let webCell = '<span class="text-muted-cell">Not available</span>';
       if (place.websiteUri && !place.socialPlatform) {
-        webCell = '<a href="' + escapeHtml(place.websiteUri) + '" target="_blank" rel="noopener noreferrer" class="table-link" title="' + escapeHtml(place.websiteUri) + '">' + escapeHtml(place.website) + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>';
+        webCell = '<a href="' + escapeHtml(place.finalWebsiteUri || place.websiteUri) + '" target="_blank" rel="noopener noreferrer" class="table-link website-cell-link" title="' + escapeHtml(place.finalWebsiteUri || place.websiteUri) + '">' + escapeHtml(place.website) + '</a>';
       } else if (place.socialPlatform) {
-        webCell = '<span class="badge badge-social">' + escapeHtml(place.website) + '</span>';
+        webCell = '<span class="badge badge-social" title="' + escapeHtml(place.socialPlatform) + '">' + escapeHtml(place.website) + '</span>';
       }
 
       // Map Link as small icon button with tooltip
       let mapCell = '<span class="text-muted-cell">—</span>';
       if (place.mapLink && place.mapLink !== 'Not available') {
         mapCell = '<a href="' + escapeHtml(place.mapLink) + '" target="_blank" rel="noopener noreferrer" class="btn-map-icon" title="View on Google Maps" aria-label="View on Google Maps">' +
-          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
             '<path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/>' +
             '<circle cx="12" cy="10" r="3"/>' +
           '</svg>' +
@@ -729,7 +925,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Phone formatting: mobile as +91 XXXXX XXXXX on one line, landline as +91 80 XXXX XXXX
       const pInfo = formatIndianPhone(place.rawPhone || place.phone);
       const phoneCell = pInfo.tel
-        ? '<a href="' + escapeHtml(pInfo.tel) + '" class="table-link phone-link">' + escapeHtml(pInfo.display) + '</a>'
+        ? '<a href="' + escapeHtml(pInfo.tel) + '" class="table-link phone-link" title="' + escapeHtml(pInfo.display) + '">' + escapeHtml(pInfo.display) + '</a>'
         : '<span class="text-muted-cell">Not available</span>';
 
       // Full week schedule in tooltip & two-line display
@@ -737,31 +933,31 @@ document.addEventListener('DOMContentLoaded', () => {
         ? escapeHtml(place.openingHours.replace(/\s*\|\s*/g, '\n'))
         : 'Hours not available';
       const hObj = formatTwoLineTodayHours(place.openingHours);
-      const hoursCell = '<div class="hours-two-line" title="Full week schedule:&#10;' + fullWeekTooltip + '">' +
-        '<span class="hours-day-label">' + escapeHtml(hObj.day) + '</span>' +
+      const hoursCell = '<div class="hours-compact" title="Full week schedule:&#10;' + fullWeekTooltip + '">' +
+        '<span class="hours-day-label">' + escapeHtml(hObj.day) + '</span> ' +
         '<span class="hours-time-val">' + escapeHtml(hObj.time) + '</span>' +
         '</div>';
 
-      // Narrow rating & review count
+      // Narrow rating & review count: "4.2 (605)" on one line
       const ratingCell = place.rating && place.rating !== 'Not available'
-        ? '<span class="rating-chip">★ ' + escapeHtml(place.rating) + (place.reviewCount && place.reviewCount !== 'Not available' ? '<span class="review-count">(' + escapeHtml(place.reviewCount) + ')</span>' : '') + '</span>'
+        ? '<span class="rating-compact">' + escapeHtml(place.rating) + (place.reviewCount && place.reviewCount !== 'Not available' ? ' (' + escapeHtml(place.reviewCount) + ')' : '') + '</span>'
         : '<span class="text-muted-cell">—</span>';
 
       // Truncated address with full text in tooltip
       const addrCell = '<span class="address-cell" title="' + escapeHtml(place.address) + '">' + escapeHtml(place.address) + '</span>';
 
-      // Combined Action column (Generate Website, Details, Refresh)
-      const hasWeb = place.websiteStatus === 'Active' || place.websiteStatus === 'Active (restricted)';
-      const actionGenerateOrBadge = hasWeb
-        ? '<span class="badge badge-has-website">Has website</span>'
-        : '<button type="button" class="btn-action-generate" data-place-id="' + escapeHtml(String(place.id)) + '"><span>Generate Website</span></button><a href="#" target="_blank" rel="noopener noreferrer" class="preview-row-link hidden" data-preview-link="' + escapeHtml(String(place.id)) + '">Open Preview ↗</a>';
-      const detailsBtn = '<button type="button" class="btn-details btn-xs" data-place-id="' + escapeHtml(String(place.id)) + '" title="Show full details">Details</button>';
+      // Actions column (Section 5)
+      const hasActiveOwnWeb = place.websiteStatus === 'Active' || place.websiteStatus === 'Active (restricted)';
+      const genBtnHtml = hasActiveOwnWeb
+        ? '<button type="button" class="btn-has-website" disabled title="Already has active website">Has website</button>'
+        : '<button type="button" class="btn-generate-compact btn-action-generate" data-place-id="' + escapeHtml(String(place.id)) + '" title="Generate Website">Generate</button><a href="#" target="_blank" rel="noopener noreferrer" class="preview-row-link hidden" data-preview-link="' + escapeHtml(String(place.id)) + '">Preview ↗</a>';
+      const detailsBtn = '<button type="button" class="btn-icon-xs btn-details" data-place-id="' + escapeHtml(String(place.id)) + '" title="Show full details">ℹ</button>';
       const refreshBtn = (place.source === 'google' && place.placeId)
-        ? '<button type="button" class="btn-refresh-details btn-xs" data-place-id="' + escapeHtml(String(place.id)) + '" title="Refresh from Google">↻ Refresh</button>'
+        ? '<button type="button" class="btn-icon-xs btn-refresh-details" data-place-id="' + escapeHtml(String(place.id)) + '" title="Refresh from Google">↻</button>'
         : '';
-      const actionCell = '<div class="action-cell-group">' + actionGenerateOrBadge + '<div class="action-sub-buttons">' + detailsBtn + refreshBtn + '</div></div>';
+      const actionCell = '<div class="action-cell-compact">' + genBtnHtml + '<div class="action-icons-row">' + detailsBtn + refreshBtn + '</div></div>';
 
-      tr.innerHTML = '<td class="col-name"><strong>' + escapeHtml(place.name) + '</strong>' + bizBadge + warnIconHtml + '</td>' +
+      tr.innerHTML = '<td class="col-name"><div class="name-clamp"><strong>' + escapeHtml(place.name) + '</strong>' + bizBadge + warnIconHtml + '</div></td>' +
         '<td class="col-type">' + typeBadge + '</td>' +
         '<td class="col-address">' + addrCell + '</td>' +
         '<td class="col-phone">' + phoneCell + '</td>' +
@@ -770,7 +966,6 @@ document.addEventListener('DOMContentLoaded', () => {
         '<td class="col-status">' + stBadge + '</td>' +
         '<td class="col-hours">' + hoursCell + '</td>' +
         '<td class="col-map">' + mapCell + '</td>' +
-        '<td class="col-spacer" aria-hidden="true"></td>' +
         '<td class="col-action">' + actionCell + '</td>';
       placesTbody.appendChild(tr);
     });
@@ -1019,6 +1214,7 @@ document.addEventListener('DOMContentLoaded', () => {
       noPhotosNote.classList.add('hidden');
       photoPickerState=details.photos.slice(0,12).map((p,idx)=>({name:p.name,widthPx:p.widthPx,heightPx:p.heightPx,authorAttributions:p.authorAttributions||[],role:idx===0?'hero':'gallery',roomIndex:0,kept:false,removed:false}));
     } else {
+      noPhotosNote.textContent = "No photos found on this place's Google pin. You can upload owner-provided photos below.";
       noPhotosNote.classList.remove('hidden');
     }
     renderPhotoAssignment();
