@@ -554,9 +554,85 @@ document.addEventListener('DOMContentLoaded', () => {
       '</div>';
   }
 
-  // ── Section 1: Compact Today Hours ──
-  function formatCompactTodayHours(openingHours) {
-    if (!openingHours || openingHours === 'Not available') return 'Hours not available';
+  // ── Section 2: Phone Formatting Helper ──
+  function formatIndianPhone(raw) {
+    if (!raw || typeof raw !== 'string' || raw === 'Not available') {
+      return { display: 'Not available', tel: null, isValid: false };
+    }
+    const s = raw.trim().replace(/[\s\-]/g, '');
+    let digits = s.replace(/\D/g, '');
+    if (!digits) return { display: raw, tel: null, isValid: false };
+
+    if ((digits.length === 12 || digits.length === 11) && digits.startsWith('91')) {
+      digits = digits.slice(2);
+    }
+    if (digits.length === 11 && digits.startsWith('0')) {
+      digits = digits.slice(1);
+    } else if (digits.length > 10 && digits.startsWith('0')) {
+      digits = digits.slice(1);
+    }
+
+    if (digits.length === 10) {
+      // 2-digit STD codes: 80, 11, 22, 33, 44, 20, 40, 79
+      if (/^(80|11|22|33|44|20|40|79)/.test(digits)) {
+        const std = digits.slice(0, 2);
+        const part1 = digits.slice(2, 6);
+        const part2 = digits.slice(6, 10);
+        return {
+          display: '+91 ' + std + ' ' + part1 + ' ' + part2,
+          tel: 'tel:+91' + digits,
+          digits,
+          isValid: true
+        };
+      }
+      // 3-digit STD codes: e.g. 821 for Mysuru, 824 for Mangaluru, etc.
+      if (/^(821|824|836|816|820|831|832|847|825|838|839|848|818|819|817|827|822|823)/.test(digits)) {
+        const std = digits.slice(0, 3);
+        const part1 = digits.slice(3, 6);
+        const part2 = digits.slice(6, 10);
+        return {
+          display: '+91 ' + std + ' ' + part1 + ' ' + part2,
+          tel: 'tel:+91' + digits,
+          digits,
+          isValid: true
+        };
+      }
+      // Mobile number: +91 XXXXX XXXXX
+      return {
+        display: '+91 ' + digits.slice(0, 5) + ' ' + digits.slice(5, 10),
+        tel: 'tel:+91' + digits,
+        digits,
+        isValid: true
+      };
+    }
+
+    // 8-digit landline without STD code (e.g. 23456789)
+    if (digits.length === 8) {
+      return {
+        display: '+91 80 ' + digits.slice(0, 4) + ' ' + digits.slice(4, 8),
+        tel: 'tel:+9180' + digits,
+        digits: '80' + digits,
+        isValid: true
+      };
+    }
+
+    if (digits.length >= 7) {
+      return {
+        display: '+91 ' + digits,
+        tel: 'tel:+91' + digits,
+        digits,
+        isValid: true
+      };
+    }
+
+    return { display: raw, tel: 'tel:' + raw.replace(/\s+/g, ''), isValid: false };
+  }
+
+  // ── Section 1: Two-line Today Hours ──
+  function formatTwoLineTodayHours(openingHours) {
+    if (!openingHours || openingHours === 'Not available') {
+      return { day: 'Today:', time: 'Not available' };
+    }
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const todayName = dayNames[new Date().getDay()];
     const parts = openingHours.split(/\s*\|\s*/);
@@ -564,17 +640,18 @@ document.addEventListener('DOMContentLoaded', () => {
       const trimmed = p.trim();
       if (trimmed.toLowerCase().startsWith(todayName.toLowerCase())) {
         const timePart = trimmed.replace(new RegExp('^' + todayName + ':\\s*', 'i'), '').trim();
-        return 'Today: ' + timePart;
+        return { day: 'Today:', time: timePart };
       }
     }
     if (parts.length > 0 && parts[0]) {
       const first = parts[0].trim();
-      if (/^\w+:\s*/.test(first)) {
-        return 'Today: ' + first.replace(/^\w+:\s*/, '');
+      const colonIdx = first.indexOf(':');
+      if (colonIdx !== -1) {
+        return { day: 'Today:', time: first.slice(colonIdx + 1).trim() };
       }
-      return first.slice(0, 30);
+      return { day: 'Today:', time: first.slice(0, 30) };
     }
-    return 'Hours not available';
+    return { day: 'Today:', time: 'Not available' };
   }
 
   function getFilteredAndSortedPlaces() {
@@ -610,7 +687,7 @@ document.addEventListener('DOMContentLoaded', () => {
     downloadExcelBtn.disabled = total === 0;
     placesTbody.innerHTML = '';
     if (total === 0) {
-      placesTbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);">No places match the selected filter.</td></tr>';
+      placesTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);">No places match the selected filter.</td></tr>';
       return;
     }
 
@@ -638,27 +715,32 @@ document.addEventListener('DOMContentLoaded', () => {
         webCell = '<span class="badge badge-social">' + escapeHtml(place.website) + '</span>';
       }
 
+      // Map Link as small icon button with tooltip
       let mapCell = '<span class="text-muted-cell">—</span>';
       if (place.mapLink && place.mapLink !== 'Not available') {
-        mapCell = '<a href="' + escapeHtml(place.mapLink) + '" target="_blank" rel="noopener noreferrer" class="table-link">Maps ↗</a>';
+        mapCell = '<a href="' + escapeHtml(place.mapLink) + '" target="_blank" rel="noopener noreferrer" class="btn-map-icon" title="View on Google Maps" aria-label="View on Google Maps">' +
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/>' +
+            '<circle cx="12" cy="10" r="3"/>' +
+          '</svg>' +
+        '</a>';
       }
 
-      let phoneDisplay = place.phone && place.phone !== 'Not available' ? place.phone : null;
-      if (phoneDisplay) {
-        const d = phoneDisplay.replace(/\D/g, '').replace(/^91/, '').replace(/^0/, '');
-        if (d.length === 10) phoneDisplay = '+91 ' + d.slice(0, 5) + ' ' + d.slice(5);
-        else if (d.length >= 7) phoneDisplay = '+91 ' + d;
-      }
-      const phoneCell = phoneDisplay
-        ? '<a href="tel:+91' + phoneDisplay.replace(/\D/g, '') + '" class="table-link phone-link">' + escapeHtml(phoneDisplay) + '</a>'
+      // Phone formatting: mobile as +91 XXXXX XXXXX on one line, landline as +91 80 XXXX XXXX
+      const pInfo = formatIndianPhone(place.rawPhone || place.phone);
+      const phoneCell = pInfo.tel
+        ? '<a href="' + escapeHtml(pInfo.tel) + '" class="table-link phone-link">' + escapeHtml(pInfo.display) + '</a>'
         : '<span class="text-muted-cell">Not available</span>';
 
-      // Full week schedule in tooltip
+      // Full week schedule in tooltip & two-line display
       const fullWeekTooltip = place.openingHours && place.openingHours !== 'Not available'
         ? escapeHtml(place.openingHours.replace(/\s*\|\s*/g, '\n'))
         : 'Hours not available';
-      const compactHours = formatCompactTodayHours(place.openingHours);
-      const hoursCell = '<span class="hours-compact" title="Full week schedule:&#10;' + fullWeekTooltip + '">' + escapeHtml(compactHours) + '</span>';
+      const hObj = formatTwoLineTodayHours(place.openingHours);
+      const hoursCell = '<div class="hours-two-line" title="Full week schedule:&#10;' + fullWeekTooltip + '">' +
+        '<span class="hours-day-label">' + escapeHtml(hObj.day) + '</span>' +
+        '<span class="hours-time-val">' + escapeHtml(hObj.time) + '</span>' +
+        '</div>';
 
       // Narrow rating & review count
       const ratingCell = place.rating && place.rating !== 'Not available'
@@ -688,6 +770,7 @@ document.addEventListener('DOMContentLoaded', () => {
         '<td class="col-status">' + stBadge + '</td>' +
         '<td class="col-hours">' + hoursCell + '</td>' +
         '<td class="col-map">' + mapCell + '</td>' +
+        '<td class="col-spacer" aria-hidden="true"></td>' +
         '<td class="col-action">' + actionCell + '</td>';
       placesTbody.appendChild(tr);
     });
@@ -728,12 +811,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // ── Sec3: Details Drawer ──
+  // ── Sec3 & Sec4: Details Drawer ──
   function openDetailsDrawer(place) {
     if (!detailsDrawer || !detailsDrawerContent) return;
     const fetchedAt = place.fetchedAt ? new Date(place.fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Not recorded';
-    const digits = (place.phone || '').replace(/\D/g, '').replace(/^91/, '').replace(/^0/, '');
-    const phoneDisplay = digits.length === 10 ? ('+91 ' + digits.slice(0, 5) + ' ' + digits.slice(5)) : (place.phone || 'Not available');
+    const phoneInfo = formatIndianPhone(place.rawPhone || place.phone);
     
     const { verify, info } = getPlaceWarnings(place);
     let warnHtml = '';
@@ -746,28 +828,84 @@ document.addEventListener('DOMContentLoaded', () => {
         info.map(i => '<li>' + escapeHtml(i) + '</li>').join('') + '</ul></div>';
     }
 
+    const primaryTypeStr = place.primaryType || 'Not specified';
     const typesStr = Array.isArray(place.types) ? place.types.join(', ') : (place.types || 'Not available');
-    const googleTypesHtml = place.source === 'google' && place.types ? '<div class="drawer-field"><span class="drawer-label">Google Types</span><span class="drawer-value">' + escapeHtml(typesStr) + '</span></div>' : '';
     const placeIdHtml = place.placeId ? '<div class="drawer-field"><span class="drawer-label">Place ID</span><span class="drawer-value mono">' + escapeHtml(place.placeId) + '</span></div>' : '';
     const mapsLink = place.mapLink && place.mapLink !== 'Not available' ? '<a href="' + escapeHtml(place.mapLink) + '" target="_blank" rel="noopener noreferrer" class="table-link">Verify on Google Maps ↗</a>' : '';
     const bst = place.businessStatus || 'OPERATIONAL';
     const bstClass = bst === 'CLOSED_PERMANENTLY' ? 'drawer-status-closed' : bst === 'CLOSED_TEMPORARILY' ? 'drawer-status-temp' : 'drawer-status-op';
 
+    const finalUrl = place.finalWebsiteUri || place.websiteUri || null;
+    let websiteHtml = '<span class="text-muted-cell">Not available</span>';
+    if (place.websiteUri) {
+      websiteHtml = '<a href="' + escapeHtml(place.websiteUri) + '" target="_blank" rel="noopener noreferrer" class="table-link mono" style="font-size:0.8rem;">' + escapeHtml(place.website || place.websiteUri) + '</a>';
+    }
+
+    let finalWebsiteHtml = '';
+    if (finalUrl) {
+      finalWebsiteHtml = '<div class="drawer-field full"><span class="drawer-label">Final Website Address (Resolved)</span><span class="drawer-value mono"><a href="' + escapeHtml(finalUrl) + '" target="_blank" rel="noopener noreferrer" class="table-link">' + escapeHtml(finalUrl) + ' ↗</a>' + (place.socialPlatform ? ' <span class="badge badge-social">' + escapeHtml(place.socialPlatform) + '</span>' : '') + '</span></div>';
+    }
+
+    // Reclassify section
+    const isOverridden = !!place.overriddenType;
+    const reclassifyHtml = '<div class="drawer-field full drawer-reclassify-field">' +
+      '<div class="drawer-reclassify-header">' +
+        '<span class="drawer-label">Classification / Override</span>' +
+        (isOverridden ? '<span class="badge badge-manual" style="font-size:0.7rem;">Overridden</span>' : '<span class="text-muted" style="font-size:0.7rem;">From Google Type</span>') +
+      '</div>' +
+      '<div class="drawer-reclassify-controls">' +
+        '<label for="drawer-reclassify-select" class="reclassify-lbl">Reclassify as:</label>' +
+        '<select id="drawer-reclassify-select" class="drawer-select">' +
+          '<option value="Restaurant"' + (place.type === 'Restaurant' ? ' selected' : '') + '>Restaurant</option>' +
+          '<option value="Stay"' + (place.type === 'Stay' ? ' selected' : '') + '>Stay</option>' +
+        '</select>' +
+        (isOverridden ? '<button type="button" id="btn-reset-reclassify" class="btn-reset-type" title="Reset back to Google original type">↺ Reset to Google (' + escapeHtml(place.originalType || 'Restaurant') + ')</button>' : '') +
+      '</div>' +
+    '</div>';
+
     detailsDrawerContent.innerHTML = warnHtml + '<div class="drawer-fields">' +
       '<div class="drawer-field full"><span class="drawer-label">Name</span><span class="drawer-value"><strong>' + escapeHtml(place.name) + '</strong></span></div>' +
-      '<div class="drawer-field"><span class="drawer-label">Type</span><span class="drawer-value">' + escapeHtml(place.type) + '</span></div>' +
+      reclassifyHtml +
+      '<div class="drawer-field"><span class="drawer-label">Current Type</span><span class="drawer-value"><strong>' + escapeHtml(place.type) + '</strong></span></div>' +
       '<div class="drawer-field"><span class="drawer-label">Business Status</span><span class="drawer-value ' + bstClass + '">' + escapeHtml(bst.replace(/_/g, ' ')) + '</span></div>' +
       '<div class="drawer-field full"><span class="drawer-label">Address</span><span class="drawer-value">' + escapeHtml(place.address) + '</span></div>' +
-      '<div class="drawer-field"><span class="drawer-label">Phone</span><span class="drawer-value">' + escapeHtml(phoneDisplay) + '</span></div>' +
+      '<div class="drawer-field"><span class="drawer-label">Phone</span><span class="drawer-value" style="white-space:nowrap;">' + (phoneInfo.tel ? '<a href="' + escapeHtml(phoneInfo.tel) + '" class="table-link phone-link">' + escapeHtml(phoneInfo.display) + '</a>' : escapeHtml(phoneInfo.display)) + '</span></div>' +
       '<div class="drawer-field"><span class="drawer-label">Rating</span><span class="drawer-value">' + (place.rating && place.rating !== 'Not available' ? '★ ' + escapeHtml(place.rating) + ' (' + escapeHtml(String(place.reviewCount || '?')) + ' reviews)' : 'Not available') + '</span></div>' +
       '<div class="drawer-field full"><span class="drawer-label">Opening Hours</span><span class="drawer-value">' + escapeHtml(place.openingHours || 'Not available') + '</span></div>' +
-      '<div class="drawer-field"><span class="drawer-label">Website</span><span class="drawer-value">' + (place.websiteUri ? '<a href="' + escapeHtml(place.websiteUri) + '" target="_blank" rel="noopener noreferrer" class="table-link">' + escapeHtml(place.website) + '</a>' : 'Not available') + '</span></div>' +
+      '<div class="drawer-field"><span class="drawer-label">Website (Original)</span><span class="drawer-value">' + websiteHtml + '</span></div>' +
       '<div class="drawer-field"><span class="drawer-label">Website Status</span><span class="drawer-value">' + escapeHtml(place.websiteStatus || 'Not listed') + '</span></div>' +
-      placeIdHtml + googleTypesHtml +
+      finalWebsiteHtml +
+      '<div class="drawer-field"><span class="drawer-label">Google Primary Type</span><span class="drawer-value mono">' + escapeHtml(primaryTypeStr) + '</span></div>' +
+      placeIdHtml +
+      '<div class="drawer-field full"><span class="drawer-label">All Google Types</span><span class="drawer-value" style="font-size:0.8rem;">' + escapeHtml(typesStr) + '</span></div>' +
       '<div class="drawer-field"><span class="drawer-label">Source</span><span class="drawer-value">' + escapeHtml(place.source || 'unknown') + '</span></div>' +
       '<div class="drawer-field"><span class="drawer-label">Data Fetched</span><span class="drawer-value">' + escapeHtml(fetchedAt) + '</span></div>' +
       (place.mapLink && place.mapLink !== 'Not available' ? '<div class="drawer-field full"><span class="drawer-label">Maps Link</span><span class="drawer-value">' + mapsLink + '</span></div>' : '') +
       '</div>';
+
+    // Wire reclassify events
+    const reclassSelect = detailsDrawerContent.querySelector('#drawer-reclassify-select');
+    if (reclassSelect) {
+      reclassSelect.addEventListener('change', () => {
+        const newType = reclassSelect.value;
+        if (!place.originalType) place.originalType = place.type;
+        place.overriddenType = newType;
+        place.type = newType;
+        renderTableAndSummary();
+        openDetailsDrawer(place);
+      });
+    }
+
+    const resetBtn = detailsDrawerContent.querySelector('#btn-reset-reclassify');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        place.type = place.originalType || 'Restaurant';
+        delete place.overriddenType;
+        renderTableAndSummary();
+        openDetailsDrawer(place);
+      });
+    }
+
     detailsDrawer.classList.remove('hidden');
   }
 

@@ -444,17 +444,27 @@ body {
   background-color: var(--bg-card-hover) !important;
 }
 
-/* Fixed column widths */
-.col-name { min-width: 175px; max-width: 210px; width: 190px; }
+/* Fixed column widths & reserved spacing for sticky Action column */
+.col-name { min-width: 185px; max-width: 215px; width: 195px; }
 .col-type { width: 90px; }
 .col-address { width: 175px; max-width: 175px; }
-.col-phone { width: 130px; }
+.col-phone { width: 145px; min-width: 140px; white-space: nowrap; }
 .col-rating { width: 95px; }
-.col-website { width: 125px; max-width: 130px; }
-.col-status { width: 110px; }
-.col-hours { width: 145px; max-width: 155px; }
-.col-map { width: 65px; }
-.col-action { min-width: 165px; width: 180px; }
+.col-website { width: 130px; max-width: 135px; }
+.col-status { width: 115px; }
+.col-hours { width: 155px; min-width: 145px; }
+.col-map { width: 65px; min-width: 65px; text-align: center; }
+.col-spacer {
+  width: 185px;
+  min-width: 185px;
+  max-width: 185px;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-card);
+  pointer-events: none;
+}
+.col-action { min-width: 185px; width: 185px; }
 
 /* Sticky Left: Name column */
 .places-table th.col-name,
@@ -470,6 +480,11 @@ body {
 }
 .places-table td.col-name {
   background-color: var(--bg-card);
+}
+
+/* Spacer Column */
+.places-table th.col-spacer {
+  background-color: #1F2937 !important;
 }
 
 /* Sticky Right: Action column */
@@ -488,7 +503,7 @@ body {
   background-color: var(--bg-card);
 }
 
-/* Address and Hours Truncation */
+/* Address Truncation */
 .address-cell {
   display: block;
   max-width: 175px;
@@ -500,15 +515,57 @@ body {
   cursor: help;
 }
 
+/* Phone nowrap */
+.phone-link {
+  white-space: nowrap !important;
+  font-family: inherit;
+}
+
+/* Two-line Opening Hours */
+.hours-two-line,
 .hours-compact {
-  display: inline-block;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
   cursor: help;
+  max-width: 150px;
+}
+
+.hours-day-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #93C5FD;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hours-time-val {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* Map Link Icon Button */
+.btn-map-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: rgba(59, 130, 246, 0.12);
+  color: #60A5FA;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  transition: all 0.15s ease;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-map-icon:hover {
+  background: rgba(59, 130, 246, 0.25);
+  color: #FFFFFF;
+  border-color: #3B82F6;
+  transform: translateY(-1px);
 }
 
 /* Action Group */
@@ -703,7 +760,8 @@ body {
   .places-table td.col-address,
   .places-table td.col-hours,
   .places-table td.col-website,
-  .places-table td.col-map {
+  .places-table td.col-map,
+  .places-table td.col-spacer {
     display: none !important;
   }
   .places-table td.col-type::before {
@@ -2204,6 +2262,58 @@ body {
 .drawer-status-op { color: #34D399; font-weight: 600; }
 .drawer-status-temp { color: #FBBF24; font-weight: 600; }
 .drawer-status-closed { color: #F87171; font-weight: 600; }
+
+/* Drawer Reclassify & Types (Sec 4) */
+.drawer-reclassify-field {
+  background: rgba(59, 130, 246, 0.08) !important;
+  border: 1px solid rgba(59, 130, 246, 0.35) !important;
+}
+
+.drawer-reclassify-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.drawer-reclassify-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.reclassify-lbl {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.drawer-select {
+  background: #111827;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.btn-reset-type {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #F87171;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-reset-type:hover {
+  background: rgba(239, 68, 68, 0.28);
+  color: #FFFFFF;
+}
 
 .badge-temp-closed {
   background: rgba(245, 158, 11, 0.15);

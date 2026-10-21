@@ -36,23 +36,28 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 // Social / listing platform detection
 // ──────────────────────────────────────────────
 const SOCIAL_PLATFORMS = [
-  { pattern: /facebook\.com/i,      label: 'Facebook' },
-  { pattern: /instagram\.com/i,     label: 'Instagram' },
-  { pattern: /zomato\.com/i,        label: 'Zomato' },
-  { pattern: /swiggy\.com/i,        label: 'Swiggy' },
-  { pattern: /justdial\.com/i,      label: 'JustDial' },
-  { pattern: /tripadvisor\./i,      label: 'TripAdvisor' },
-  { pattern: /booking\.com/i,       label: 'Booking.com' },
-  { pattern: /makemytrip\.com/i,    label: 'MakeMyTrip' },
-  { pattern: /goibibo\.com/i,       label: 'Goibibo' },
-  { pattern: /airbnb\./i,           label: 'Airbnb' },
-  { pattern: /linktr\.ee/i,         label: 'Linktree' },
-  { pattern: /yelp\.com/i,          label: 'Yelp' },
-  { pattern: /urbanspoon\.com/i,    label: 'Urbanspoon' },
-  { pattern: /burrp\.com/i,         label: 'Burrp' },
-  { pattern: /magicpin\.in/i,       label: 'Magicpin' },
-  { pattern: /dineout\.co\.in/i,    label: 'Dineout' },
-  { pattern: /eazydiner\.com/i,     label: 'EazyDiner' },
+  { pattern: /facebook\.com|fb\.me/i,           label: 'Facebook' },
+  { pattern: /instagram\.com/i,                 label: 'Instagram' },
+  { pattern: /zomato\.com/i,                    label: 'Zomato' },
+  { pattern: /swiggy\.com/i,                    label: 'Swiggy' },
+  { pattern: /justdial\.com/i,                  label: 'JustDial' },
+  { pattern: /tripadvisor\./i,                  label: 'TripAdvisor' },
+  { pattern: /booking\.com/i,                   label: 'Booking.com' },
+  { pattern: /makemytrip\.com/i,                label: 'MakeMyTrip' },
+  { pattern: /goibibo\.com/i,                   label: 'Goibibo' },
+  { pattern: /airbnb\./i,                       label: 'Airbnb' },
+  { pattern: /linktr\.ee/i,                     label: 'Linktree' },
+  { pattern: /yelp\.com/i,                      label: 'Yelp' },
+  { pattern: /urbanspoon\.com/i,                label: 'Urbanspoon' },
+  { pattern: /burrp\.com/i,                     label: 'Burrp' },
+  { pattern: /magicpin\.in/i,                   label: 'Magicpin' },
+  { pattern: /dineout\.co\.in/i,                label: 'Dineout' },
+  { pattern: /eazydiner\.com/i,                 label: 'EazyDiner' },
+  { pattern: /maps\.google\.com|google\.com\/maps|maps\.app\.goo\.gl|business\.google\.com|g\.page/i, label: 'Google Maps' },
+  { pattern: /sitch\.app/i,                     label: 'Sitch' },
+  { pattern: /dotpe\.in/i,                      label: 'DotPe' },
+  { pattern: /petpooja\.com/i,                  label: 'PetPooja' },
+  { pattern: /thrivenow\.in/i,                  label: 'Thrive' }
 ];
 
 function detectSocialPlatform(url) {
@@ -61,6 +66,73 @@ function detectSocialPlatform(url) {
     if (pattern.test(url)) return label;
   }
   return null;
+}
+
+// ──────────────────────────────────────────────
+// URL Shortener detection & Redirect Follower (Sec 3)
+// ──────────────────────────────────────────────
+const SHORTENER_DOMAINS = new Set([
+  'cutt.ly', 'bit.ly', 'tinyurl.com', 'rb.gy', 't.co', 'goo.gl',
+  'linktr.ee', 'rotf.lol', 'is.gd', 'buff.ly', 'ow.ly', 'rebrand.ly',
+  't.ly', 'shorturl.at', 'qrco.de', 'page.link', 'app.link', 'lnkd.in'
+]);
+
+function isUrlShortener(urlStr) {
+  if (!urlStr || typeof urlStr !== 'string') return false;
+  try {
+    const parsed = new URL(urlStr.startsWith('http') ? urlStr : 'https://' + urlStr);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (SHORTENER_DOMAINS.has(host)) return true;
+    for (const d of SHORTENER_DOMAINS) {
+      if (host.endsWith('.' + d)) return true;
+    }
+  } catch {}
+  return false;
+}
+
+async function followRedirects(initialUrl, maxHops = 5, timeoutMs = 5000) {
+  if (!initialUrl || typeof initialUrl !== 'string') {
+    return { finalUrl: null, finalStatus: null, hops: 0 };
+  }
+  let currentUrl = initialUrl.trim();
+  if (!/^https?:\/\//i.test(currentUrl)) currentUrl = 'https://' + currentUrl;
+  let hops = 0;
+
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+  };
+
+  while (hops < maxHops) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      let res = await fetch(currentUrl, { method: 'HEAD', headers, signal: controller.signal, redirect: 'manual' });
+      if (res.status === 405 || res.status === 501) {
+        res = await fetch(currentUrl, { method: 'GET', headers, signal: controller.signal, redirect: 'manual' });
+      }
+      clearTimeout(timeoutId);
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (location) {
+          try {
+            const nextUrl = new URL(location, currentUrl).href;
+            currentUrl = nextUrl;
+            hops++;
+            continue;
+          } catch {
+            break;
+          }
+        }
+      }
+      return { finalUrl: currentUrl, finalStatus: res.status, hops };
+    } catch {
+      clearTimeout(timeoutId);
+      break;
+    }
+  }
+  return { finalUrl: currentUrl, finalStatus: null, hops };
 }
 
 // ──────────────────────────────────────────────
@@ -175,25 +247,69 @@ function getWhatsAppNumber(whatsappOverride, national, international) {
   return null;
 }
 
-// Display format: +91 XXXXX XXXXX (10-digit number) or fallback
-function formatPhoneDisplay(digits) {
-  if (!digits) return null;
-  if (digits.length === 10) {
-    return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
+// Display format:
+// Indian mobile: +91 XXXXX XXXXX
+// Landlines with 2-digit STD code (e.g. 80 for Bengaluru): +91 80 XXXX XXXX
+// Landlines with 3-digit STD code (e.g. 821 for Mysuru): +91 821 XXX XXXX
+function formatIndianPhoneNumber(raw) {
+  if (!raw || typeof raw !== 'string' || raw === 'Not available') return 'Not available';
+  const s = raw.trim().replace(/[\s\-]/g, '');
+  let digits = s.replace(/\D/g, '');
+  if (!digits) return raw;
+
+  // Strip +91 / 91 country code prefix if 12 or 11 digits
+  if ((digits.length === 12 || digits.length === 11) && digits.startsWith('91')) {
+    digits = digits.slice(2);
   }
+  // Strip leading 0 (STD trunk prefix e.g. 080... or 098...)
+  if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  } else if (digits.length > 10 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  if (digits.length === 10) {
+    // 2-digit STD codes: 80, 11, 22, 33, 44, 20, 40, 79
+    if (/^(80|11|22|33|44|20|40|79)/.test(digits)) {
+      const std = digits.slice(0, 2);
+      const part1 = digits.slice(2, 6);
+      const part2 = digits.slice(6, 10);
+      return `+91 ${std} ${part1} ${part2}`;
+    }
+    // 3-digit STD codes (e.g. 821 for Mysuru, 824 for Mangaluru, 836, etc.)
+    if (/^(821|824|836|816|820|831|832|847|825|838|839|848|818|819|817|827|822|823)/.test(digits)) {
+      const std = digits.slice(0, 3);
+      const part1 = digits.slice(3, 6);
+      const part2 = digits.slice(6, 10);
+      return `+91 ${std} ${part1} ${part2}`;
+    }
+    // Mobile number: +91 XXXXX XXXXX
+    return `+91 ${digits.slice(0, 5)} ${digits.slice(5, 10)}`;
+  }
+
+  // 8-digit landline without STD code (e.g. 23456789)
+  if (digits.length === 8) {
+    return `+91 80 ${digits.slice(0, 4)} ${digits.slice(4, 8)}`;
+  }
+
   if (digits.length >= 7) {
     return `+91 ${digits}`;
   }
-  return digits;
+
+  return raw;
 }
 
-// tel: URI — tel:+91XXXXXXXXXX for 10-digit numbers
-function buildTelUri(digits) {
+function formatPhoneDisplay(digits) {
   if (!digits) return null;
-  if (digits.length === 10) {
-    return `tel:+91${digits}`;
-  }
-  if (digits.length >= 7) {
+  return formatIndianPhoneNumber(digits);
+}
+
+// tel: URI — tel:+91XXXXXXXXXX without spaces
+function buildTelUri(digitsOrRaw) {
+  if (!digitsOrRaw) return null;
+  const digits = cleanPhoneDigits(digitsOrRaw);
+  if (!digits) return null;
+  if (digits.length === 10 || digits.length >= 7) {
     return `tel:+91${digits}`;
   }
   return `tel:${digits}`;
@@ -538,14 +654,8 @@ function mapGooglePlace(gp, computedType) {
   const rating = gp.rating ? String(gp.rating) : 'Not available';
   const reviewCount = gp.userRatingCount ? String(gp.userRatingCount) : 'Not available';
 
-  // Format phone (+91 for Indian numbers)
-  let phone = rawPhone;
-  const digits = cleanPhoneDigits(rawPhone);
-  if (digits && digits.length === 10) {
-    phone = `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
-  } else if (digits && digits.length >= 7 && !phone.startsWith('+91')) {
-    phone = `+91 ${digits}`;
-  }
+  // Format phone (+91 for Indian numbers, keeping original digits)
+  const phone = formatIndianPhoneNumber(rawPhone);
 
   // Determine website display and social platform
   let websiteDisplay = rawWebsite || 'Not available';
@@ -592,11 +702,13 @@ function mapGooglePlace(gp, computedType) {
     source: 'google',
     name,
     type,
+    originalType: type,
     address,
     phone,
     rawPhone,
     website: websiteDisplay,
     websiteUri: rawWebsite,
+    finalWebsiteUri: rawWebsite,
     socialPlatform,
     openingHours,
     mapLink,
@@ -644,7 +756,7 @@ function mapTomTomPlace(item) {
   const addr = item.address || {};
   const pos = item.position || {};
   const rawPhone = poi.phone || (Array.isArray(poi.phoneNumbers) && poi.phoneNumbers[0] ? poi.phoneNumbers[0].phone : null);
-  const phone = rawPhone ? rawPhone.trim() : 'Not available';
+  const phone = formatIndianPhoneNumber(rawPhone ? rawPhone.trim() : 'Not available');
   const rawUrl = poi.url ? sanitizeUrl(poi.url) : null;
 
   let websiteDisplay = rawUrl || 'Not available';
@@ -662,11 +774,13 @@ function mapTomTomPlace(item) {
     source: 'tomtom',
     name: poi.name ? poi.name.trim() : 'Unknown Place',
     type,
+    originalType: type,
     address: addr.freeformAddress ? addr.freeformAddress.trim() : 'Not available',
     phone,
     rawPhone: phone,
     website: websiteDisplay,
     websiteUri: rawUrl,
+    finalWebsiteUri: rawUrl,
     socialPlatform,
     openingHours: formatOpeningHours(poi.openingHours),
     mapLink: `https://www.google.com/maps?q=${pos.lat},${pos.lon}`,
@@ -680,18 +794,65 @@ function mapTomTomPlace(item) {
 }
 
 // ──────────────────────────────────────────────
-// Website status resolution
+// Website status resolution with shortener redirect following (Sec 3)
 // ──────────────────────────────────────────────
 async function resolveWebsiteStatus(place) {
-  // Social platform → "No own website"
-  if (place.socialPlatform) {
-    return { ...place, websiteStatus: 'No own website' };
+  let targetUrl = place.websiteUri;
+  if (!targetUrl || targetUrl === 'Not available') {
+    return { ...place, websiteStatus: 'Not listed', finalWebsiteUri: null };
   }
-  if (!place.websiteUri || place.websiteUri === 'Not available') {
-    return { ...place, websiteStatus: 'Not listed' };
+
+  let finalUrl = targetUrl;
+  let socialPlatform = detectSocialPlatform(targetUrl);
+
+  // If shortener, or potential redirect, follow redirects up to 5 hops with 5-second timeout
+  if (isUrlShortener(targetUrl) || /cutt\.ly|bit\.ly|tinyurl|rb\.gy|t\.co|goo\.gl|linktr\.ee/i.test(targetUrl)) {
+    const redir = await followRedirects(targetUrl, 5, 5000);
+    if (redir.finalUrl) {
+      finalUrl = redir.finalUrl;
+      const detected = detectSocialPlatform(finalUrl);
+      if (detected) {
+        socialPlatform = detected;
+      }
+    }
   }
-  const status = await checkWebsiteStatus(place.websiteUri);
-  return { ...place, websiteStatus: status };
+
+  // If final address is social or listing platform, mark "No own website" and show platform name
+  if (socialPlatform) {
+    return {
+      ...place,
+      finalWebsiteUri: finalUrl,
+      websiteStatus: 'No own website',
+      socialPlatform: socialPlatform,
+      website: `[${socialPlatform}]`
+    };
+  }
+
+  // Follow general redirects to capture final URL if not already followed
+  if (finalUrl === targetUrl) {
+    const redir = await followRedirects(finalUrl, 5, 5000);
+    if (redir.finalUrl) {
+      finalUrl = redir.finalUrl;
+      const detected = detectSocialPlatform(finalUrl);
+      if (detected) {
+        return {
+          ...place,
+          finalWebsiteUri: finalUrl,
+          websiteStatus: 'No own website',
+          socialPlatform: detected,
+          website: `[${detected}]`
+        };
+      }
+    }
+  }
+
+  const status = await checkWebsiteStatus(finalUrl);
+  return {
+    ...place,
+    finalWebsiteUri: finalUrl,
+    websiteStatus: status,
+    website: (place.website && !place.website.startsWith('http')) ? place.website : finalUrl
+  };
 }
 
 // ──────────────────────────────────────────────
@@ -993,8 +1154,9 @@ app.post('/api/search-single', async (req, res) => {
     checkDailyLimit(1);
     const searchRes = await googleTextSearch(query, null, 1);
     const places = (searchRes.places || []).map(gp => mapGooglePlace(gp));
+    const resolvedPlaces = await Promise.all(places.map(p => resolveWebsiteStatus(p)));
 
-    return res.json({ places });
+    return res.json({ places: resolvedPlaces });
   } catch (err) {
     console.error('[Search Single Error]', err.message || err);
     return res.status(err.status || 500).json({ error: err.message || 'Search failed.' });
@@ -1018,11 +1180,15 @@ app.post('/api/enrich', async (req, res) => {
     const details = await googlePlaceDetailsWithRetry(placeId);
 
     // Sanitize and forward safe fields only (never the API key)
+    const rawEnrichedPhone = details.nationalPhoneNumber || details.internationalPhoneNumber || '';
+    const formattedEnrichedPhone = formatIndianPhoneNumber(rawEnrichedPhone);
+
     const safe = {
       id: details.id || placeId,
       name: details.displayName?.text || '',
       address: details.formattedAddress || '',
-      phone: details.nationalPhoneNumber || details.internationalPhoneNumber || '',
+      phone: formattedEnrichedPhone,
+      rawPhone: rawEnrichedPhone,
       website: details.websiteUri || '',
       mapLink: details.googleMapsUri || '',
       rating: details.rating || null,
@@ -1416,7 +1582,7 @@ app.post('/api/export', async (req, res) => {
         name: row.name || 'Not available',
         type: row.type || 'Not available',
         address: row.address || 'Not available',
-        phone: row.phone || 'Not available',
+        phone: row.phone ? formatIndianPhoneNumber(row.phone) : 'Not available',
         rating: row.rating || 'Not available',
         website: row.website || 'Not available',
         websiteStatus: row.websiteStatus || 'Not listed',

@@ -122,11 +122,45 @@ If `BLOB_READ_WRITE_TOKEN` is not set (e.g., during local testing), the app auto
 
 ---
 
+## 🚀 Recent Improvements (Table Layout, Phone Formatting, Shortlinks & Classification)
+
+### 1. Column Layout & Reserved Action Spacing
+- **Spacer Column (`.col-spacer`)**: Added an explicit reserved width spacer (185px) matching the width of the sticky Action column (`right: 0`). This ensures horizontal table scrolling never obscures the **Opening Hours** or **Map Link** columns.
+- **Two-Line Opening Hours (`.hours-two-line`)**: Formats opening hours into two clean lines (Day on line 1, e.g. `TODAY`, time on line 2, e.g. `10:00 AM–10:00 PM`) for optimal vertical alignment and readability without truncation.
+- **Dedicated Map Icon Button (`.btn-map-icon`)**: Replaced raw text links with a compact, accessible icon button featuring a map pin SVG and a descriptive tooltip (`"Open in Google Maps"`).
+- **Responsive Layout**: Tested across viewports (1366px, 1024px, 768px, and 390px). On mobile screens (under 900px), cleanly switches to a stacked card layout with zero horizontal overflow.
+
+### 2. Standardized Indian Phone Formatting
+- **Mobile Numbers**: Formatted as `+91 XXXXX XXXXX` on a single line (`white-space: nowrap !important`) without altering digits returned by Google.
+- **Landlines**: Formatted with standard STD codes (e.g. `+91 80 XXXX XXXX` for 2-digit STD codes like Bengaluru or `+91 821 XXX XXXX` for 3-digit STD codes like Mysuru).
+- **Actionable `tel:` Links**: Formatted cleanly as `tel:+91XXXXXXXXXX` (no spaces or hyphens).
+- **Universal Consistency**: Applied uniformly across the Table view, Details drawer, and Excel export.
+
+### 3. URL Shortener Resolution & Platform Detection
+- **Server-Side Redirect Following**: Server follows URL shorteners (`cutt.ly`, `bit.ly`, `tinyurl.com`, `rb.gy`, `t.co`, `goo.gl`, `linktr.ee`, etc.) up to 5 hops with a 5-second timeout.
+- **Final URL Resolution**: Uses the final destination address for website health checks and displays both the original and resolved URLs in the Details drawer.
+- **Social & Listing Platform Flagging**: If the resolved destination is a social or listing platform (e.g., Instagram, Facebook, Sitch, Zomato, Swiggy, JustDial), the status is accurately marked as **"No own website"** and displays the detected platform badge.
+
+### 4. Classification Check & Interactive Reclassify
+- **Type Transparency**: Details drawer displays both the Google `primaryType` and all associated Google `types`.
+- **Interactive Reclassify**: Provides a "Reclassify" dropdown (`Restaurant` / `Stay`) with a **"↺ Reset to Google"** button. The chosen classification dynamically overrides the row badge, feeds into the **Generate Website** pipeline, and persists in the Excel export.
+
+### 5. Mysuru Verification
+- Fully verified with Mysuru test locations:
+  - **Hithie - The Gourmet Dining**: Follows short link `https://cutt.ly/Hithie` to final destination `https://sitch.app/hithie`, correctly flags as `"No own website"` (`[Sitch]`), and formats phone as `+91 70909 00663`.
+  - **Hideaway Coffee**: Follows Instagram presence and flags as `"No own website"` (`[Instagram]`).
+  - **Harish Bakery**: Correctly displays mobile number as `+91 94489 38572` and website status as `"Not listed"`.
+
+---
+
 ## 🛠️ Automated Testing
 
 Run the automated test suites:
 
 ```bash
+# New fixes test suite (Layout, Phone, Shortlinks, Classification, Mysuru checks)
+node test_new_fixes.js
+
 # Full test suite covering Sections 1 through 5
 node test_suite_sections_1_to_5.js
 
