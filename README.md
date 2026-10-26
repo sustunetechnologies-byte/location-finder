@@ -6,12 +6,19 @@ A full-stack Node.js + Express web application that discovers hospitality busine
 
 ## 🌟 Architecture & Features (Sections 1 – 8)
 
-### 1. Streamlined Search Interface (Section 1)
+### 1. Streamlined Search Interface & "Without Website" Discovery (Section 1)
 - **Simplified Controls**: The search bar contains only 4 essential controls:
   - **Location**: City or town name input with automatic resolution.
   - **Category**: Restaurants, Stays, or Both.
   - **Data source**: Google Places or TomTom.
   - Two search buttons: **"Search Places"** and **"Search Places (without website)"**.
+- **Search Places (without website)**:
+  - **Zero Duplicate Requests**: Compares resolved Google place ID and category with the current session. Reuses loaded results immediately with 0 new Google requests. If no search has run, runs normal search first and automatically applies filter.
+  - **Strict Status Filtering**: Displays only businesses without an active website: `"Not listed"`, `"No own website"` (Instagram, Facebook, Zomato, Swiggy, JustDial, etc.), and `"Inactive"` (or pending `"Checking..."`). Never displays `"Active"` or `"Active (restricted)"`.
+  - **Bot-Protection & Resilient Health Checks**: Classifies 403, 429, 503 bot challenges (Cloudflare, AWS WAF, etc.) as `"Active (restricted)"`. Sites are marked `"Inactive"` only after HEAD, GET, and 8-second GET retry fail. Inactive rows display a `"Verify"` badge with tooltip.
+  - **Client & Server Concurrency**: Client dispatches batches of at most 5 places with max 3 concurrent requests. Server executes batch checks with limit of 5. Cutoffs return `"Checking"` for retry rather than marking inactive.
+  - **Mode Indicator & Mutual Exclusivity**: Shows indicator `"Showing places without an active website: X of Y places"` with `"Show all places"` reset link. Disables `"Show only active websites"` with explanatory tooltip while active.
+  - **Excel Export**: Exports all filtered rows with `_no_website` included in the filename.
 - **Removed Distractions**: Removed legacy business name search, manual "add missing place" box, search radius selectors (Small/Medium/Large/City-wide), confirmation alert dialogs, and sticky table columns.
 
 ---

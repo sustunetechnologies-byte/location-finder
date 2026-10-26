@@ -41,6 +41,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchAmberBanners = document.getElementById('search-amber-banners');
   const searchCappedBanner = document.getElementById('search-capped-banner');
   const searchErrorsBanner = document.getElementById('search-errors-banner');
+  // Mode Indicator Bar & Website Check Elements
+  const modeIndicatorBar = document.getElementById('mode-indicator-bar');
+  const modeIndicatorText = document.getElementById('mode-indicator-text');
+  const showAllPlacesLink = document.getElementById('show-all-places-link');
+  const websiteCheckCard = document.getElementById('website-check-card');
+  const websiteCheckFill = document.getElementById('website-check-fill');
+  const websiteCheckText = document.getElementById('website-check-text');
   // Section 4: Pagination Controls
   const paginationWrapper = document.getElementById('pagination-wrapper');
   const paginationSummary = document.getElementById('pagination-summary');
@@ -202,6 +209,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentPage = 1;
   const PAGE_SIZE = 20;
   let currentResolvedArea = null;
+  let loadedSession = {
+    placeId: null,
+    areaName: null,
+    category: null,
+    source: null
+  };
   let modalPlace = null;
   let modalEnriched = null;
   let userItems = [];
@@ -213,10 +226,42 @@ document.addEventListener('DOMContentLoaded', () => {
   let photoPickerState = [];
   let lightboxIndex = 0;
 
+  function setFilterMode(mode) {
+    filterMode = mode;
+    currentPage = 1;
+    if (filterMode === 'no-website') {
+      activeOnlyCheckbox.checked = false;
+      activeOnlyCheckbox.disabled = true;
+      if (activeOnlyCheckbox.parentElement) {
+        activeOnlyCheckbox.parentElement.title = 'Disabled in "without website" mode. Click "Show all places" to re-enable.';
+      }
+      if (modeIndicatorBar) modeIndicatorBar.classList.remove('hidden');
+    } else {
+      activeOnlyCheckbox.disabled = false;
+      if (activeOnlyCheckbox.parentElement) {
+        activeOnlyCheckbox.parentElement.title = '';
+      }
+      if (modeIndicatorBar) modeIndicatorBar.classList.add('hidden');
+    }
+    renderTableAndSummary();
+  }
+
   // ── Event Listeners ──
   searchForm.addEventListener('submit', handleSearchSubmit);
   searchNoWebsiteBtn.addEventListener('click', handleSearchNoWebsiteClick);
-  activeOnlyCheckbox.addEventListener('change', () => { filterMode='all'; currentPage = 1; renderTableAndSummary(); });
+  showAllPlacesLink?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setFilterMode('all');
+  });
+  activeOnlyCheckbox.addEventListener('change', () => {
+    if (filterMode === 'no-website') return;
+    currentPage = 1;
+    renderTableAndSummary();
+  });
+  categorySelect?.addEventListener('change', () => {
+    currentPage = 1;
+    renderTableAndSummary();
+  });
   hideWarningsCheckbox?.addEventListener('change', () => { currentPage = 1; renderTableAndSummary(); });
   downloadExcelBtn.addEventListener('click', handleExcelDownload);
   previewAlertClose?.addEventListener('click', () => previewAlert.classList.add('hidden'));
@@ -322,23 +367,50 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Search & Resolution ──
   async function handleSearchSubmit(e) {
     if (e) e.preventDefault();
-    filterMode = 'all';
-    currentPage = 1;
-    currentSource = sourceSelect.value;
+    setFilterMode('all');
     await executeSearch();
   }
 
   async function handleSearchNoWebsiteClick() {
     const query = locationInput.value.trim();
     if (!query) { locationInput.focus(); return; }
-    filterMode = 'no-website';
-    currentPage = 1;
-    activeOnlyCheckbox.checked = false;
-    currentSource = sourceSelect.value;
-    if (rawPlaces.length > 0 && query.toLowerCase() === currentSearchQuery.toLowerCase() && categorySelect.value === currentCategory && sourceSelect.value === currentSource) {
-      renderTableAndSummary();
-      return;
+    const selectedCategory = categorySelect.value;
+    const selectedSource = sourceSelect.value;
+
+    // Check if same resolved location and category were already searched in this session
+    if (rawPlaces.length > 0 && loadedSession.placeId && loadedSession.category === selectedCategory && loadedSession.source === selectedSource) {
+      const sameTyped = query.toLowerCase() === (currentSearchQuery || '').toLowerCase();
+      const sameResolved = currentResolvedArea && (
+        query.toLowerCase() === currentResolvedArea.name.toLowerCase() ||
+        query.toLowerCase() === (currentResolvedArea.name + ', ' + (currentResolvedArea.state || '')).toLowerCase() ||
+        currentResolvedArea.placeId === loadedSession.placeId
+      );
+
+      if (sameTyped || sameResolved) {
+        setFilterMode('no-website');
+        return;
+      }
+
+      // If user typed a different string, check if it resolves to the same placeId
+      if (selectedSource === 'google') {
+        try {
+          const resResp = await fetch('/api/resolve-location', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ location: query })
+          });
+          const resData = await resResp.json();
+          if (resData.status === 'resolved' && resData.area?.placeId === loadedSession.placeId) {
+            currentSearchQuery = query;
+            setFilterMode('no-website');
+            return;
+          }
+        } catch {}
+      }
     }
+
+    // If nothing loaded yet or different location/category:
+    setFilterMode('no-website');
     await executeSearch();
   }
 
@@ -362,6 +434,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (source === 'tomtom') {
       showState('loading');
       setButtonsDisabled(true);
+      resetWebsiteCheckQueue();
       try {
         const resp = await fetch('/api/search', {
           method: 'POST',
@@ -371,6 +444,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'TomTom search failed.');
         rawPlaces = data.results || [];
+        loadedSession.placeId = 'tomtom_' + query.toLowerCase();
+        loadedSession.areaName = query;
+        loadedSession.category = category;
+        loadedSession.source = 'tomtom';
         cacheBadge.classList.toggle('hidden', !data.cached);
         sourceBadge.textContent = 'TomTom';
         sourceBadge.className = 'badge badge-tomtom';
@@ -471,6 +548,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function runCityWideSearch(area, typedQuery, category) {
     currentResolvedArea = area;
+    loadedSession.placeId = area.placeId;
+    loadedSession.areaName = area.name;
+    loadedSession.category = category;
+    loadedSession.source = 'google';
+    resetWebsiteCheckQueue();
 
     // Show Location Resolution Banner (Section 2)
     if (locationBanner && locBannerText) {
@@ -509,50 +591,61 @@ document.addEventListener('DOMContentLoaded', () => {
     let stepErrors = [];
 
     while (!isComplete) {
-      const resp = await fetch('/api/search/step', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location: typedQuery,
-          category,
-          placeId: area.placeId,
-          viewport: area.viewport,
-          cursor
-        })
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        if (data.code === 'DAILY_LIMIT_EXCEEDED' || resp.status === 429) {
-          throw new Error(data.error || data.message || 'Daily Google Places request limit reached.');
+      try {
+        const resp = await fetch('/api/search/step', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: typedQuery,
+            category,
+            placeId: area.placeId,
+            viewport: area.viewport,
+            cursor
+          })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          if (data.code === 'DAILY_LIMIT_EXCEEDED' || resp.status === 429) {
+            throw new Error(data.error || data.message || 'Daily Google Places request limit reached.');
+          }
+          throw new Error(data.error || 'Failed to search places.');
         }
-        throw new Error(data.error || 'Failed to search places.');
-      }
 
-      totalRequestsUsed = data.totalRequestsUsed || 0;
-      lastSearchTotalRequests = totalRequestsUsed;
-      if (data.capped) isCapped = true;
-      if (data.errors && data.errors.length > 0) {
-        stepErrors.push(...data.errors);
-      }
-
-      if (data.places && data.places.length > 0) {
-        rawPlaces.push(...data.places);
-        renderTableAndSummary();
-        triggerBackgroundWebsiteCheck(data.places);
-      }
-
-      cursor = data.nextCursor;
-      isComplete = data.isComplete || !cursor;
-      stepCount++;
-
-      const pct = isComplete ? 100 : Math.min(95, 15 + stepCount * 18);
-      if (searchProgressFill) searchProgressFill.style.width = pct + '%';
-      if (searchProgressText) {
-        if (isComplete) {
-          searchProgressText.textContent = rawPlaces.length + ' places found, ' + totalRequestsUsed + ' Google requests used';
-        } else {
-          searchProgressText.textContent = 'Searching... ' + rawPlaces.length + ' places found';
+        totalRequestsUsed = data.totalRequestsUsed || 0;
+        lastSearchTotalRequests = totalRequestsUsed;
+        if (data.capped) isCapped = true;
+        if (data.errors && data.errors.length > 0) {
+          stepErrors.push(...data.errors);
         }
+
+        if (data.places && data.places.length > 0) {
+          rawPlaces.push(...data.places);
+          renderTableAndSummary();
+          triggerBackgroundWebsiteCheck(data.places);
+        }
+
+        cursor = data.nextCursor;
+        isComplete = data.isComplete || !cursor;
+        stepCount++;
+
+        const pct = isComplete ? 100 : Math.min(95, 15 + stepCount * 18);
+        if (searchProgressFill) searchProgressFill.style.width = pct + '%';
+        if (searchProgressText) {
+          if (isComplete) {
+            searchProgressText.textContent = rawPlaces.length + ' places found, ' + totalRequestsUsed + ' Google requests used';
+          } else {
+            searchProgressText.textContent = 'Searching... ' + rawPlaces.length + ' places found';
+          }
+        }
+      } catch (stepErr) {
+        // If we already collected places from earlier steps, preserve them and show banner rather than wiping everything
+        if (rawPlaces.length > 0) {
+          console.warn('[Search Step Interrupted]', stepErr);
+          stepErrors.push({ wording: 'Pagination', message: stepErr.message || 'Search step interrupted.' });
+          isComplete = true;
+          break;
+        }
+        throw stepErr;
       }
     }
 
@@ -579,40 +672,121 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Background website status checks (Section 3)
+  // Background website status checks with batching, queue & concurrency limits (Section 3 & Fixes)
   const checkedWebsitesSet = new Set();
-  async function triggerBackgroundWebsiteCheck(placesList) {
+  let checkQueue = [];
+  let activeCheckRequests = 0;
+  const BATCH_SIZE = 5;
+  const MAX_CONCURRENT_REQUESTS = 3;
+  let totalWebsitesToCheck = 0;
+  let completedWebsitesCount = 0;
+  const retryCounts = new Map();
+
+  function resetWebsiteCheckQueue() {
+    checkQueue = [];
+    checkedWebsitesSet.clear();
+    activeCheckRequests = 0;
+    totalWebsitesToCheck = 0;
+    completedWebsitesCount = 0;
+    retryCounts.clear();
+    updateWebsiteCheckProgressUI();
+  }
+
+  function updateWebsiteCheckProgressUI() {
+    if (!websiteCheckCard) return;
+    if (totalWebsitesToCheck > 0 && completedWebsitesCount < totalWebsitesToCheck) {
+      websiteCheckCard.classList.remove('hidden');
+      const pct = Math.round((completedWebsitesCount / totalWebsitesToCheck) * 100);
+      if (websiteCheckFill) websiteCheckFill.style.width = Math.max(5, Math.min(100, pct)) + '%';
+      if (websiteCheckText) {
+        websiteCheckText.textContent = `Checking websites... ${completedWebsitesCount} of ${totalWebsitesToCheck} done`;
+      }
+    } else {
+      websiteCheckCard.classList.add('hidden');
+    }
+  }
+
+  function triggerBackgroundWebsiteCheck(placesList) {
     const toCheck = placesList.filter(p => p.websiteUri && !checkedWebsitesSet.has(p.id));
     if (toCheck.length === 0) return;
-    toCheck.forEach(p => checkedWebsitesSet.add(p.id));
 
-    const chunkSize = 10;
-    for (let i = 0; i < toCheck.length; i += chunkSize) {
-      const chunk = toCheck.slice(i, i + chunkSize);
+    toCheck.forEach(p => {
+      checkedWebsitesSet.add(p.id);
+      checkQueue.push(p);
+      totalWebsitesToCheck++;
+    });
+
+    updateWebsiteCheckProgressUI();
+    processCheckQueue();
+  }
+
+  function processCheckQueue() {
+    while (activeCheckRequests < MAX_CONCURRENT_REQUESTS && checkQueue.length > 0) {
+      const batch = checkQueue.splice(0, BATCH_SIZE);
+      activeCheckRequests++;
+
       fetch('/api/check-websites-batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ places: chunk })
+        body: JSON.stringify({ places: batch })
       })
       .then(r => r.json())
       .then(res => {
-        if (!res || !Array.isArray(res.results)) return;
+        if (!res || !Array.isArray(res.results)) {
+          batch.forEach(p => {
+            const retries = (retryCounts.get(p.id) || 0) + 1;
+            retryCounts.set(p.id, retries);
+            if (retries <= 2) checkQueue.push(p);
+            else completedWebsitesCount++;
+          });
+          return;
+        }
+
         let changed = false;
         res.results.forEach(item => {
           const target = rawPlaces.find(p => p.id === item.id);
-          if (target) {
-            target.websiteStatus = item.websiteStatus;
-            target.finalWebsiteUri = item.finalWebsiteUri;
-            target.socialPlatform = item.socialPlatform;
-            target.website = item.website;
-            changed = true;
+          if (item.websiteStatus === 'Checking') {
+            const retries = (retryCounts.get(item.id) || 0) + 1;
+            retryCounts.set(item.id, retries);
+            if (retries <= 2) {
+              if (target) checkQueue.push(target);
+            } else {
+              completedWebsitesCount++;
+            }
+          } else {
+            if (target) {
+              target.websiteStatus = item.websiteStatus;
+              target.finalWebsiteUri = item.finalWebsiteUri;
+              target.socialPlatform = item.socialPlatform;
+              target.website = item.website;
+              changed = true;
+            }
+            completedWebsitesCount++;
           }
         });
+
         if (changed) {
           renderTableAndSummary();
         }
       })
-      .catch(err => console.warn('[Background Website Check Error]', err.message));
+      .catch(err => {
+        console.warn('[Website Check Batch Error]', err.message);
+        batch.forEach(p => {
+          const retries = (retryCounts.get(p.id) || 0) + 1;
+          retryCounts.set(p.id, retries);
+          if (retries <= 2) checkQueue.push(p);
+          else completedWebsitesCount++;
+        });
+      })
+      .finally(() => {
+        activeCheckRequests--;
+        updateWebsiteCheckProgressUI();
+        if (checkQueue.length > 0) {
+          processCheckQueue();
+        } else if (activeCheckRequests === 0) {
+          renderTableAndSummary();
+        }
+      });
     }
   }
 
@@ -779,10 +953,24 @@ document.addEventListener('DOMContentLoaded', () => {
   function getFilteredAndSortedPlaces() {
     let filtered = [...rawPlaces];
     if (filterMode === 'no-website') {
-      filtered = filtered.filter(p => p.websiteStatus === 'Not listed' || p.websiteStatus === 'Inactive' || p.websiteStatus === 'No own website');
+      filtered = filtered.filter(p => {
+        const s = p.websiteStatus || 'Not listed';
+        // Never show Active or Active (restricted)
+        if (s === 'Active' || s === 'Active (restricted)') return false;
+        // Show Not listed, No own website, Inactive, and while pending: Checking
+        return s === 'Not listed' || s === 'No own website' || s === 'Inactive' || s === 'Checking';
+      });
     } else if (activeOnlyCheckbox && activeOnlyCheckbox.checked) {
       filtered = filtered.filter(p => p.websiteStatus === 'Active' || p.websiteStatus === 'Active (restricted)');
     }
+
+    const cat = categorySelect ? categorySelect.value : 'both';
+    if (cat === 'restaurants') {
+      filtered = filtered.filter(p => p.type === 'Restaurant' || (p.type && p.type.toLowerCase().includes('restaurant')));
+    } else if (cat === 'stays') {
+      filtered = filtered.filter(p => p.type === 'Stay' || (p.type && p.type.toLowerCase().includes('stay')));
+    }
+
     if (hideWarningsCheckbox && hideWarningsCheckbox.checked) {
       filtered = filtered.filter(p => getPlaceWarnings(p).verify.length === 0);
     }
@@ -826,11 +1014,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const total = disp.length;
     const phoneCount = disp.filter(p => p.phone && p.phone !== 'Not available').length;
     const webCount = disp.filter(p => p.websiteStatus === 'Active' || p.websiteStatus === 'Active (restricted)').length;
+    const isCheckingWebsites = totalWebsitesToCheck > 0 && completedWebsitesCount < totalWebsitesToCheck;
 
-    if (filterMode === 'no-website') summaryLine.textContent = total + ' of ' + rawPlaces.length + ' places have no active website';
-    else if (activeOnlyCheckbox && activeOnlyCheckbox.checked) summaryLine.textContent = total + ' places with active websites found';
-    else if (lastSearchTotalRequests !== null) summaryLine.textContent = total + ' places found, ' + lastSearchTotalRequests + ' Google requests used';
-    else summaryLine.textContent = total + ' places found: ' + phoneCount + ' with phone, ' + webCount + ' with active website';
+    if (filterMode === 'no-website') {
+      if (rawPlaces.length > 0 && total === 0 && !isCheckingWebsites) {
+        summaryLine.textContent = 'All ' + rawPlaces.length + ' places have an active website';
+        if (modeIndicatorText) {
+          modeIndicatorText.textContent = 'All ' + rawPlaces.length + ' places have an active website';
+        }
+      } else {
+        summaryLine.textContent = total + ' of ' + rawPlaces.length + ' places have no active website';
+        if (modeIndicatorText) {
+          modeIndicatorText.textContent = 'Showing places without an active website: ' + total + ' of ' + rawPlaces.length + ' places';
+        }
+      }
+    } else if (activeOnlyCheckbox && activeOnlyCheckbox.checked) {
+      summaryLine.textContent = total + ' places with active websites found';
+    } else if (lastSearchTotalRequests !== null) {
+      summaryLine.textContent = total + ' places found, ' + lastSearchTotalRequests + ' Google requests used';
+    } else {
+      summaryLine.textContent = total + ' places found: ' + phoneCount + ' with phone, ' + webCount + ' with active website';
+    }
 
     downloadExcelBtn.disabled = total === 0;
 
@@ -881,7 +1085,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     placesTbody.innerHTML = '';
     if (total === 0) {
-      placesTbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);">No places match the selected filter.</td></tr>';
+      if (filterMode === 'no-website' && rawPlaces.length > 0 && !isCheckingWebsites) {
+        placesTbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);font-weight:500;">All ' + rawPlaces.length + ' places have an active website.</td></tr>';
+      } else {
+        placesTbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);">No places match the selected filter.</td></tr>';
+      }
       return;
     }
 
@@ -900,7 +1108,14 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (place.websiteStatus === 'Active (restricted)') stClass = 'status-restricted';
       else if (place.websiteStatus === 'Inactive') stClass = 'status-inactive';
       else if (place.websiteStatus === 'No own website') stClass = 'status-social';
-      const stBadge = '<span class="badge ' + stClass + '">' + escapeHtml(place.websiteStatus) + '</span>';
+      else if (place.websiteStatus === 'Checking') stClass = 'status-checking';
+
+      const statusLabel = place.websiteStatus || 'Not listed';
+      let verifyBadgeHtml = '';
+      if (place.websiteStatus === 'Inactive') {
+        verifyBadgeHtml = ' <span class="badge badge-verify" title="Site did not respond; open it to confirm">Verify</span>';
+      }
+      const stBadge = '<span class="badge ' + stClass + '">' + escapeHtml(statusLabel) + '</span>' + verifyBadgeHtml;
 
       let webCell = '<span class="text-muted-cell">Not available</span>';
       if (place.websiteUri && !place.socialPlatform) {
@@ -1722,22 +1937,48 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function handleExcelDownload() {
-    const rows=getFilteredAndSortedPlaces();
-    if(!rows.length) return;
-    downloadExcelBtn.disabled=true;
-    const origText=downloadExcelBtn.querySelector('span').textContent;
-    downloadExcelBtn.querySelector('span').textContent='Exporting…';
+    const rows = getFilteredAndSortedPlaces();
+    if (!rows.length) return;
+    downloadExcelBtn.disabled = true;
+    const origText = downloadExcelBtn.querySelector('span').textContent;
+    downloadExcelBtn.querySelector('span').textContent = 'Exporting…';
     try {
-      const resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows,location:currentSearchQuery||'places'})});
-      if(!resp.ok) throw new Error('Failed to generate Excel file.');
-      const cd=resp.headers.get('Content-Disposition');
-      let fn='places_'+(currentSearchQuery||'results')+'.xlsx';
-      if(cd){const m=cd.match(/filename="?([^"]+)"?/);if(m?.[1]) fn=m[1];}
-      const blob=await resp.blob(), url=window.URL.createObjectURL(blob);
-      const a=document.createElement('a'); a.href=url; a.download=fn;
-      document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
-    } catch(err){console.error('[Export Error]',err);alert('Error downloading Excel file: '+err.message);}
-    finally{downloadExcelBtn.disabled=false;downloadExcelBtn.querySelector('span').textContent=origText;}
+      const resp = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows,
+          location: currentSearchQuery || 'places',
+          filterMode,
+          isNoWebsite: filterMode === 'no-website'
+        })
+      });
+      if (!resp.ok) throw new Error('Failed to generate Excel file.');
+      const cd = resp.headers.get('Content-Disposition');
+      const sanitizedLoc = (currentSearchQuery || 'results').toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').substring(0, 30) || 'places';
+      const dateStr = new Date().toISOString().split('T')[0];
+      const noWebSuffix = filterMode === 'no-website' ? '_no_website' : '';
+      let fn = `places_${sanitizedLoc}${noWebSuffix}_${dateStr}.xlsx`;
+      if (cd) {
+        const m = cd.match(/filename="?([^"]+)"?/);
+        if (m?.[1]) fn = m[1];
+      }
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fn;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('[Export Error]', err);
+      alert('Error downloading Excel file: ' + err.message);
+    } finally {
+      downloadExcelBtn.disabled = false;
+      downloadExcelBtn.querySelector('span').textContent = origText;
+    }
   }
 
   function escapeHtml(str) {

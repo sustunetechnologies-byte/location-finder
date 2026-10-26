@@ -20,10 +20,18 @@ const PORT = process.env.PORT || 3000;
 // ──────────────────────────────────────────────
 // Configuration & Limits (Sections 1-5)
 // ──────────────────────────────────────────────
+const GOOGLE_KEY = (process.env.GOOGLE_PLACES_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+const TOMTOM_KEY = (process.env.TOMTOM_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+const VERCEL_BLOB_TOKEN = (process.env.BLOB_READ_WRITE_TOKEN || '').trim().replace(/^["']|["']$/g, '');
+
 let SEARCH_SECRET = (process.env.SEARCH_SECRET || '').trim();
 if (!SEARCH_SECRET) {
-  console.warn('[Server Warning] SEARCH_SECRET is not set in environment variables! Generating a temporary random secret for this process.');
-  SEARCH_SECRET = crypto.randomBytes(32).toString('hex');
+  // Use deterministic fallback derived from API key / fixed seed
+  // so that multi-instance serverless deployments (Vercel) and restarts do not
+  // break pagination cursors when SEARCH_SECRET is not explicitly set.
+  const fallbackSeed = GOOGLE_KEY || 'location_finder_hmac_secret_salt_2026';
+  SEARCH_SECRET = crypto.createHash('sha256').update(`locfinder_${fallbackSeed}`).digest('hex');
+  console.warn('[Server Warning] SEARCH_SECRET not set in environment variables! Using deterministic fallback secret.');
 }
 const SEARCH_REQUEST_CAP = parseInt(process.env.SEARCH_REQUEST_CAP, 10) || 600;
 const DAILY_REQUEST_CAP = parseInt(process.env.DAILY_REQUEST_CAP, 10) || 1500;
@@ -62,10 +70,6 @@ const KNOWN_AMBIGUOUS_NAMES = {
 // ──────────────────────────────────────────────
 // Key Loading (log presence only, never values)
 // ──────────────────────────────────────────────
-const GOOGLE_KEY = (process.env.GOOGLE_PLACES_API_KEY || '').trim().replace(/^["']|["']$/g, '');
-const TOMTOM_KEY = (process.env.TOMTOM_API_KEY || '').trim().replace(/^["']|["']$/g, '');
-const VERCEL_BLOB_TOKEN = (process.env.BLOB_READ_WRITE_TOKEN || '').trim().replace(/^["']|["']$/g, '');
-
 console.log(`[Server] Google key loaded: ${GOOGLE_KEY ? 'yes' : 'no'}`);
 console.log(`[Server] TomTom key loaded: ${TOMTOM_KEY ? 'yes' : 'no'}`);
 console.log(`[Server] Vercel Blob configured: ${VERCEL_BLOB_TOKEN ? 'yes' : 'no'}`);
@@ -198,18 +202,71 @@ function sanitizeUrl(rawUrl) {
   if (!/^https?:\/\//i.test(trimmed)) trimmed = 'https://' + trimmed;
   return trimmed;
 }
+function isBotChallengeText(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lower = text.toLowerCase();
+  return lower.includes('just a moment') ||
+    lower.includes('attention required') ||
+    lower.includes('access denied') ||
+    lower.includes('security check') ||
+    lower.includes('bot detection') ||
+    lower.includes('verify you are human') ||
+    lower.includes('checking your browser') ||
+    lower.includes('ddos-guard') ||
+    lower.includes('cloudflare ray id') ||
+    (lower.includes('cloudflare') && (lower.includes('challenge') || lower.includes('turnstile')));
+}
+
+function isBotBlockedResponse(res, bodySnippet = '') {
+  if (!res) return false;
+  const status = res.status;
+  if (status === 403 || status === 429) return true;
+
+  const serverHeader = (res.headers?.get?.('server') || '').toLowerCase();
+  const cfRay = res.headers?.get?.('cf-ray');
+  const cfMitigated = res.headers?.get?.('cf-mitigated');
+
+  if (cfRay || cfMitigated || serverHeader.includes('cloudflare') || serverHeader.includes('ddos-guard') || serverHeader.includes('sucuri')) {
+    if (status === 503 || status === 401) return true;
+  }
+
+  if (isBotChallengeText(bodySnippet)) return true;
+
+  return false;
+}
+
+async function readBodySnippet(res, maxBytes = 8192) {
+  try {
+    if (!res || !res.body) return '';
+    const reader = res.body.getReader();
+    let received = 0;
+    const chunks = [];
+    while (received < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      received += value.length;
+    }
+    try { reader.cancel(); } catch {}
+    const totalBuf = Buffer.concat(chunks.map(c => Buffer.from(c)));
+    return totalBuf.toString('utf8');
+  } catch {
+    return '';
+  }
+}
 
 async function checkWebsiteStatus(url) {
   if (!url || url === 'Not available') return 'Not listed';
 
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9'
   };
 
-  async function tryFetch(method) {
+  async function tryFetch(method, timeoutMs) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, { method, headers, signal: controller.signal, redirect: 'follow' });
       clearTimeout(timeoutId);
@@ -220,16 +277,41 @@ async function checkWebsiteStatus(url) {
     }
   }
 
-  let res = await tryFetch('HEAD');
-  if (res) {
-    if (res.status >= 200 && res.status < 400) return 'Active';
-    if (res.status === 403 || res.status === 429) return 'Active (restricted)';
+  // 1. Try HEAD with 5s timeout
+  let headRes = await tryFetch('HEAD', 5000);
+  if (headRes) {
+    if (isBotBlockedResponse(headRes)) return 'Active (restricted)';
+    if (headRes.status >= 200 && headRes.status < 400) return 'Active';
   }
-  res = await tryFetch('GET');
-  if (res) {
-    if (res.status >= 200 && res.status < 400) return 'Active';
-    if (res.status === 403 || res.status === 429) return 'Active (restricted)';
+
+  // 2. Try GET with 5s timeout
+  let getRes = await tryFetch('GET', 5000);
+  if (getRes) {
+    let bodySnippet = '';
+    if (getRes.status >= 200 && getRes.status < 400) {
+      bodySnippet = await readBodySnippet(getRes, 8192);
+      if (isBotBlockedResponse(getRes, bodySnippet)) return 'Active (restricted)';
+      return 'Active';
+    }
+    if (isBotBlockedResponse(getRes, bodySnippet)) return 'Active (restricted)';
+    bodySnippet = await readBodySnippet(getRes, 8192);
+    if (isBotBlockedResponse(getRes, bodySnippet)) return 'Active (restricted)';
   }
+
+  // 3. Retry once with GET and longer 8-second timeout before finally marking Inactive
+  let retryRes = await tryFetch('GET', 8000);
+  if (retryRes) {
+    let retryBody = '';
+    if (retryRes.status >= 200 && retryRes.status < 400) {
+      retryBody = await readBodySnippet(retryRes, 8192);
+      if (isBotBlockedResponse(retryRes, retryBody)) return 'Active (restricted)';
+      return 'Active';
+    }
+    if (isBotBlockedResponse(retryRes, retryBody)) return 'Active (restricted)';
+    retryBody = await readBodySnippet(retryRes, 8192);
+    if (isBotBlockedResponse(retryRes, retryBody)) return 'Active (restricted)';
+  }
+
   return 'Inactive';
 }
 
@@ -554,13 +636,20 @@ function signCursor(payload) {
 }
 
 function verifyCursor(token) {
-  if (!token || typeof token !== 'string') return null;
+  if (!token || typeof token !== 'string') {
+    console.warn('[Cursor Verify] Token is missing or invalid type.');
+    return null;
+  }
   const dotIdx = token.indexOf('.');
-  if (dotIdx === -1) return null;
+  if (dotIdx === -1) {
+    console.warn('[Cursor Verify] Token missing delimiter.');
+    return null;
+  }
   const b64 = token.slice(0, dotIdx);
   const sig = token.slice(dotIdx + 1);
   const expectedSig = crypto.createHmac('sha256', SEARCH_SECRET).update(b64).digest('hex');
   if (sig.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expectedSig, 'hex'))) {
+    console.warn('[Cursor Verify] HMAC signature mismatch. SEARCH_SECRET may differ between server instances.');
     return null;
   }
   try {
@@ -572,7 +661,8 @@ function verifyCursor(token) {
       jsonStr = compressed.toString('utf8');
     }
     return JSON.parse(jsonStr);
-  } catch {
+  } catch (err) {
+    console.warn('[Cursor Verify] Decompression / JSON parse failed:', err.message);
     return null;
   }
 }
@@ -761,6 +851,11 @@ function mapGooglePlace(gp, computedType) {
   // Determine type from Google primaryType and types array (never from words in the name)
   const type = computedType || classifyGooglePlace(gp) || 'Restaurant';
 
+  let websiteStatus = 'Not listed';
+  if (rawWebsite) {
+    websiteStatus = socialPlatform ? 'No own website' : 'Checking';
+  }
+
   return {
     id: gp.id || crypto.randomBytes(8).toString('hex'),
     placeId: gp.id || null,
@@ -775,6 +870,7 @@ function mapGooglePlace(gp, computedType) {
     websiteUri: rawWebsite,
     finalWebsiteUri: rawWebsite,
     socialPlatform,
+    websiteStatus,
     openingHours,
     mapLink,
     rating,
@@ -833,6 +929,11 @@ function mapTomTomPlace(item) {
 
   const type = item._computedType || (poi.categorySet?.some(c => c.id === 7314) ? 'Stay' : 'Restaurant');
 
+  let websiteStatus = 'Not listed';
+  if (rawUrl) {
+    websiteStatus = socialPlatform ? 'No own website' : 'Checking';
+  }
+
   return {
     id: item.id || crypto.randomBytes(8).toString('hex'),
     placeId: null,
@@ -847,6 +948,7 @@ function mapTomTomPlace(item) {
     websiteUri: rawUrl,
     finalWebsiteUri: rawUrl,
     socialPlatform,
+    websiteStatus,
     openingHours: formatOpeningHours(poi.openingHours),
     mapLink: `https://www.google.com/maps?q=${pos.lat},${pos.lon}`,
     rating: 'Not available',
@@ -1251,27 +1353,28 @@ app.post('/api/check-websites-batch', async (req, res) => {
     if (!Array.isArray(places)) {
       return res.status(400).json({ error: 'places array is required.' });
     }
-    const tasks = places.map(p => async () => {
+    const batch = places.slice(0, 5);
+    const results = await Promise.all(batch.map(async (p) => {
       try {
         const resolved = await resolveWebsiteStatus(p);
         return {
           id: p.id,
-          websiteStatus: resolved.websiteStatus,
-          finalWebsiteUri: resolved.finalWebsiteUri,
-          socialPlatform: resolved.socialPlatform,
-          website: resolved.website
+          websiteStatus: resolved.websiteStatus || 'Checking',
+          finalWebsiteUri: resolved.finalWebsiteUri || p.websiteUri || null,
+          socialPlatform: resolved.socialPlatform || null,
+          website: resolved.website || p.website || 'Not available'
         };
-      } catch {
+      } catch (err) {
+        // If cut off or unexpected error, mark Checking so client can retry; never mark Inactive
         return {
           id: p.id,
-          websiteStatus: 'Not listed',
+          websiteStatus: 'Checking',
           finalWebsiteUri: p.websiteUri || null,
-          socialPlatform: null,
+          socialPlatform: p.socialPlatform || null,
           website: p.website || 'Not available'
         };
       }
-    });
-    const results = await runInBatches(tasks, 10, 50);
+    }));
     return res.json({ results });
   } catch (err) {
     console.error('[Check Websites Batch Error]', err.message || err);
@@ -1849,7 +1952,7 @@ app.post('/api/generate-site', (req, res) => {
 // ──────────────────────────────────────────────
 app.post('/api/export', async (req, res) => {
   try {
-    const { rows = [], location = 'results' } = req.body;
+    const { rows = [], location = 'results', filterMode, isNoWebsite } = req.body;
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Location Finder';
@@ -1921,6 +2024,12 @@ app.post('/api/export', async (req, res) => {
       } else if (sv === 'Inactive') {
         statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FEE2E2' } };
         statusCell.font = { color: { argb: '991B1B' }, bold: true };
+      } else if (sv === 'No own website') {
+        statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E0E7FF' } };
+        statusCell.font = { color: { argb: '3730A3' }, bold: true };
+      } else if (sv === 'Checking') {
+        statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FEF3C7' } };
+        statusCell.font = { color: { argb: '92400E' }, bold: true };
       } else {
         statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F3F4F6' } };
         statusCell.font = { color: { argb: '4B5563' } };
@@ -1953,7 +2062,8 @@ app.post('/api/export', async (req, res) => {
 
     const sanitizedLoc = location.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').substring(0, 30) || 'places';
     const dateStr = new Date().toISOString().split('T')[0];
-    const filename = `places_${sanitizedLoc}_${dateStr}.xlsx`;
+    const noWebSuffix = (isNoWebsite || filterMode === 'no-website') ? '_no_website' : '';
+    const filename = `places_${sanitizedLoc}${noWebSuffix}_${dateStr}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
